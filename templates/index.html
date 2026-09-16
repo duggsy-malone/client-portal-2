@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Send us your files for a quote</title>
+<style>
+  :root { --brand: #2c3e50; --accent: #2980b9; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    background: #f4f6f8; margin: 0; padding: 0; color: #222;
+  }
+  .wrap { max-width: 640px; margin: 40px auto; padding: 0 16px; }
+  h1 { color: var(--brand); font-size: 1.6rem; margin-bottom: 4px; }
+  p.lede { color: #555; margin-top: 0; }
+  .dropzone {
+    border: 2px dashed #b0bec5; border-radius: 12px; background: #fff;
+    padding: 48px 24px; text-align: center; cursor: pointer; transition: all .15s ease;
+  }
+  .dropzone.dragover { border-color: var(--accent); background: #eaf3fa; }
+  .dropzone p { margin: 8px 0; color: #607d8b; }
+  .dropzone .icon { font-size: 40px; }
+  input[type=file] { display: none; }
+  .filelist { margin-top: 16px; }
+  .fileitem {
+    display: flex; justify-content: space-between; align-items: center;
+    background: #fff; border: 1px solid #e0e0e0; border-radius: 8px;
+    padding: 10px 14px; margin-bottom: 8px; font-size: 14px;
+  }
+  .fileitem .remove { color: #c0392b; cursor: pointer; font-weight: bold; }
+  textarea {
+    width: 100%; margin-top: 16px; border-radius: 8px; border: 1px solid #ccc;
+    padding: 10px; font-family: inherit; resize: vertical; min-height: 70px;
+  }
+  button.submit {
+    margin-top: 16px; width: 100%; padding: 14px; border: none; border-radius: 8px;
+    background: var(--accent); color: #fff; font-size: 16px; cursor: pointer;
+  }
+  button.submit:disabled { background: #b0bec5; cursor: not-allowed; }
+  .status { margin-top: 16px; font-size: 14px; }
+  .status.error { color: #c0392b; }
+  .status.success { background: #e8f8ef; border: 1px solid #b7e4c7; padding: 16px; border-radius: 8px; color: #1e6b3c; }
+  .note { font-size: 12px; color: #90a4ae; margin-top: 24px; }
+  progress { width: 100%; height: 8px; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Send us your files for a quote</h1>
+  <p class="lede">Drop your PDF, JPG, ZIP, PowerPoint or Excel files below and we'll get back to you with a quote.</p>
+
+  <div class="dropzone" id="dropzone">
+    <div class="icon">&#128193;</div>
+    <p><strong>Drag &amp; drop files here</strong>, or click to browse</p>
+    <p style="font-size:12px">Accepted: PDF, JPG/JPEG, ZIP, PPTX, XLSX &middot; up to 500MB total</p>
+    <input type="file" id="fileInput" multiple accept=".pdf,.jpg,.jpeg,.png,.zip,.pptx,.xlsx,.xlsm">
+  </div>
+
+  <div class="filelist" id="filelist"></div>
+
+  <textarea id="clientNote" placeholder="Anything we should know about this job? (optional)"></textarea>
+
+  <button class="submit" id="submitBtn" disabled>Submit for quote</button>
+  <progress id="progressBar" value="0" max="100" style="display:none"></progress>
+  <div id="status"></div>
+
+  <p class="note">Files are used only to prepare your quote and are stored securely for a limited time.</p>
+</div>
+
+<script>
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const filelistEl = document.getElementById('filelist');
+const submitBtn = document.getElementById('submitBtn');
+const statusEl = document.getElementById('status');
+const progressBar = document.getElementById('progressBar');
+const MAX_TOTAL_BYTES = 500 * 1024 * 1024;
+
+let files = [];
+
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropzone.classList.remove('dragover');
+  addFiles(e.dataTransfer.files);
+});
+fileInput.addEventListener('change', e => addFiles(e.target.files));
+
+function addFiles(fileListObj) {
+  for (const f of fileListObj) files.push(f);
+  renderFileList();
+}
+
+function renderFileList() {
+  filelistEl.innerHTML = '';
+  files.forEach((f, idx) => {
+    const div = document.createElement('div');
+    div.className = 'fileitem';
+    div.innerHTML = `<span>${f.name} (${(f.size/1024/1024).toFixed(2)} MB)</span><span class="remove" data-idx="${idx}">&#10005;</span>`;
+    filelistEl.appendChild(div);
+  });
+  filelistEl.querySelectorAll('.remove').forEach(el => {
+    el.addEventListener('click', () => {
+      files.splice(parseInt(el.dataset.idx), 1);
+      renderFileList();
+    });
+  });
+  const total = files.reduce((s, f) => s + f.size, 0);
+  submitBtn.disabled = files.length === 0 || total > MAX_TOTAL_BYTES;
+  statusEl.className = 'status';
+  statusEl.textContent = total > MAX_TOTAL_BYTES
+    ? `Total size ${(total/1024/1024).toFixed(0)}MB exceeds the 500MB limit - please remove some files.`
+    : '';
+}
+
+submitBtn.addEventListener('click', () => {
+  const formData = new FormData();
+  files.forEach(f => formData.append('files', f));
+  formData.append('client_note', document.getElementById('clientNote').value);
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/upload', true);
+  progressBar.style.display = 'block';
+  submitBtn.disabled = true;
+
+  xhr.upload.onprogress = (e) => {
+    if (e.lengthComputable) progressBar.value = (e.loaded / e.total) * 100;
+  };
+  xhr.onload = () => {
+    progressBar.style.display = 'none';
+    if (xhr.status === 200) {
+      statusEl.className = 'status success';
+      statusEl.textContent = "Thanks! Your files have been received and we'll be in touch with a quote shortly.";
+      filelistEl.innerHTML = '';
+      files = [];
+      document.getElementById('clientNote').value = '';
+    } else {
+      statusEl.className = 'status error';
+      statusEl.textContent = 'Something went wrong submitting your files. Please try again or contact us directly.';
+      submitBtn.disabled = false;
+    }
+  };
+  xhr.onerror = () => {
+    progressBar.style.display = 'none';
+    statusEl.className = 'status error';
+    statusEl.textContent = 'Upload failed - please check your connection and try again.';
+    submitBtn.disabled = false;
+  };
+  xhr.send(formData);
+});
+</script>
+</body>
+</html>

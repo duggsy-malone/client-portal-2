@@ -1,0 +1,17 @@
+# Render "Blueprint" - lets Render pick up all the settings below automatically
+# when you connect this repo, instead of typing them into the dashboard by hand.
+# See README.md for the click-by-click deployment steps.
+services:
+  - type: web
+    name: client-portal
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: REPORT_RECIPIENT
+        value: kaye@sandyboy.co.uk
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
