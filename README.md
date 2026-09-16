@@ -274,6 +274,10 @@ This needs a real Google account with actual storage behind it - **not** a bare 
 
 **That refresh token is a credential** - anyone who has it can act as this Drive connection. Don't paste it anywhere other than Render's Environment tab.
 
+### Checking the Google connection
+
+Visit `https://client-portal-2.onrender.com/admin/drive-check?key=<your GDRIVE_ADMIN_KEY>`. It runs each Google step the upload uses (get an access token, create a folder, open an upload slot, list, delete) and shows whether each worked and how long it took, stopping at the first failure. It creates and immediately deletes a folder called "Drive check - safe to delete". If uploads get stuck on "Preparing your upload...", this is the first thing to look at.
+
 ### Storage/cleanup
 
 Files normally only sit in Drive briefly. For a quote request, the client is told "received" as soon as their upload reaches Drive; the app then pulls the files down in the background, analyses them, creates the TransferNow/WeTransfer link and emails you. The Drive copies are deleted only once that download link exists. For "just count my pages", they're deleted as soon as the pages are counted.

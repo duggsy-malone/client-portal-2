@@ -407,11 +407,16 @@ function showSuccess(parsed, isCountOnly) {
 
 // Small JSON request - used for /upload/init and /upload/finalize, both of
 // which only ever carry file NAMES/metadata, never the file bytes themselves.
-function postJSON(url, body) {
+function postJSON(url, body, timeoutMs) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', url, true);
     xhr.setRequestHeader('Content-Type', 'application/json');
+    if (timeoutMs) {
+      xhr.timeout = timeoutMs;
+      xhr.ontimeout = () => reject(new Error(
+        "This is taking much longer than it should - please try again in a minute, or contact us if it keeps happening."));
+    }
     xhr.onload = () => {
       let parsed = {};
       try { parsed = JSON.parse(xhr.responseText); } catch (e) {}
@@ -526,7 +531,7 @@ async function submitViaDrive(initResp, isCountOnly) {
     count_only: isCountOnly,
     client_note: document.getElementById('clientNote').value,
     contact: buildContactPayload(),
-  });
+  }, 15 * 60 * 1000);  // count-only has to download + analyse before replying
   showSuccess(finalizeResp, isCountOnly);
 }
 
@@ -553,7 +558,7 @@ submitBtn.addEventListener('click', async () => {
       count_only: isCountOnly,
       ...buildContactPayload(),
       files: files.map(f => ({ name: f.name, size: f.size })),
-    });
+    }, 90 * 1000);
 
     if (initResp.drive_configured === false) {
       submitLegacy(isCountOnly);

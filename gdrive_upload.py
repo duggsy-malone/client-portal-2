@@ -46,12 +46,29 @@ DRIVE_UPLOAD_API = "https://www.googleapis.com/upload/drive/v3"
 # Workspace OAuth consent screen skip Google's full verification review.
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
 
-REQUEST_TIMEOUT = 60
-DOWNLOAD_TIMEOUT = 300
+# (connect, read) seconds. A short connect timeout means an unreachable
+# Google fails within seconds with a clear error, instead of hanging.
+REQUEST_TIMEOUT = (10, 60)
+DOWNLOAD_TIMEOUT = (10, 300)
 
 _token_lock = threading.Lock()
 _cached_access_token = None
 _cached_expiry = 0  # unix timestamp
+
+
+def _reset_after_fork():
+    """The web server (gunicorn) copies this process to create its workers.
+    If a background thread happened to be holding _token_lock at that exact
+    moment, the copy would inherit a lock that nobody will ever release, and
+    every Drive call in that worker would wait forever. Give each copy a
+    fresh lock and no cached token."""
+    global _token_lock, _cached_access_token, _cached_expiry
+    _token_lock = threading.Lock()
+    _cached_access_token = None
+    _cached_expiry = 0
+
+
+os.register_at_fork(after_in_child=_reset_after_fork)
 
 
 class GoogleDriveError(Exception):
@@ -73,25 +90,36 @@ def _get_access_token():
             "Google Drive isn't set up yet (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / "
             "GOOGLE_REFRESH_TOKEN not all set) - see README.md 'Large files: Google Drive bypass'."
         )
-    with _token_lock:
+    # Never wait forever for another thread's token refresh.
+    lock = _token_lock
+    if not lock.acquire(timeout=90):
+        raise GoogleDriveError("Timed out waiting for a Google access token.")
+    try:
         if _cached_access_token and time.time() < _cached_expiry - 60:
             return _cached_access_token
-        resp = requests.post(
-            TOKEN_URL,
-            data={
-                "client_id": GOOGLE_CLIENT_ID,
-                "client_secret": GOOGLE_CLIENT_SECRET,
-                "refresh_token": GOOGLE_REFRESH_TOKEN,
-                "grant_type": "refresh_token",
-            },
-            timeout=REQUEST_TIMEOUT,
-        )
+        started = time.time()
+        try:
+            resp = requests.post(
+                TOKEN_URL,
+                data={
+                    "client_id": GOOGLE_CLIENT_ID,
+                    "client_secret": GOOGLE_CLIENT_SECRET,
+                    "refresh_token": GOOGLE_REFRESH_TOKEN,
+                    "grant_type": "refresh_token",
+                },
+                timeout=REQUEST_TIMEOUT,
+            )
+        except requests.RequestException as e:
+            raise GoogleDriveError(f"Couldn't reach Google to get an access token: {e}")
         if not resp.ok:
             raise GoogleDriveError(f"Refreshing Google access token failed ({resp.status_code}): {resp.text}")
         data = resp.json()
         _cached_access_token = data["access_token"]
         _cached_expiry = time.time() + data.get("expires_in", 3600)
+        logger.info(f"Got a Google access token in {time.time() - started:.1f}s.")
         return _cached_access_token
+    finally:
+        lock.release()
 
 
 def _headers(extra=None):
@@ -252,6 +280,37 @@ def cleanup_folder(folder_id, file_ids):
     for fid in file_ids:
         delete_file(fid)
     delete_file(folder_id)
+
+
+def diagnose(origin=None):
+    """Runs each Drive step the upload flow uses, timing each one, and stops
+    at the first failure. Returns a list of {step, ok, seconds, detail}.
+    Used by /admin/drive-check so a problem can be pinned down without
+    uploading anything."""
+    results = []
+
+    def step(name, fn):
+        t = time.time()
+        try:
+            detail = fn()
+            results.append({"step": name, "ok": True, "seconds": round(time.time() - t, 2), "detail": detail})
+            return True
+        except Exception as e:
+            results.append({"step": name, "ok": False, "seconds": round(time.time() - t, 2), "detail": str(e)[:500]})
+            return False
+
+    if not is_configured():
+        return [{"step": "settings", "ok": False, "seconds": 0,
+                 "detail": "GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN not all set"}]
+    state = {}
+    if not step("get Google access token", lambda: (_get_access_token(), "ok")[1]):
+        return results
+    if not step("create test folder", lambda: state.setdefault("folder", create_submission_folder("Drive check - safe to delete"))):
+        return results
+    step("open an upload slot", lambda: (create_resumable_upload_session("check.txt", state["folder"], origin=origin), "ok")[1])
+    step("list folder", lambda: f"{len(list_files_in_folder(state['folder']))} file(s)")
+    step("delete test folder", lambda: (delete_file(state["folder"]), "ok")[1])
+    return results
 
 
 # --- One-time authorization (see /admin/gdrive-auth + /admin/gdrive-callback

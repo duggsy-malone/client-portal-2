@@ -104,12 +104,38 @@ def cleanup_old_submissions():
 
 
 def cleanup_loop():
+    time.sleep(CLEANUP_FIRST_RUN_DELAY)  # let the app finish starting up first
     while True:
         try:
             cleanup_old_submissions()
         except Exception as e:
             logger.error(f"Cleanup error: {e}")
         time.sleep(24 * 3600)  # once a day
+
+
+CLEANUP_FIRST_RUN_DELAY = int(os.environ.get("CLEANUP_FIRST_RUN_DELAY", "300"))
+_background_started_pid = None
+_background_lock = threading.Lock()
+
+
+def _ensure_background_started():
+    """Start the daily cleanup inside the process that's actually serving
+    requests. Starting it at import time (before the web server copies the
+    app into its workers) risked a copy inheriting a lock held by a thread
+    that doesn't exist in the copy - which makes every Google Drive call in
+    that worker wait forever."""
+    global _background_started_pid
+    if _background_started_pid == os.getpid():
+        return
+    with _background_lock:
+        if _background_started_pid != os.getpid():
+            threading.Thread(target=cleanup_loop, daemon=True).start()
+            _background_started_pid = os.getpid()
+
+
+@app.before_request
+def _start_background_jobs():
+    _ensure_background_started()
 
 
 def _validate_contact(contact, count_only):
@@ -237,8 +263,12 @@ def upload_init():
     # Google needs this to allow the browser's direct upload (see gdrive_upload.py).
     origin = request.host_url.rstrip("/")
 
+    logger.info(f"Submission {submission_id} (ref {reference_number}): preparing Drive upload for "
+                f"{len(files)} file(s), {total_bytes / 1024 / 1024:.1f} MB, count_only={count_only}.")
+    started = time.time()
     try:
         folder_id = gdrive_upload.create_submission_folder(f"Portal submission {reference_number}")
+        logger.info(f"Submission {submission_id}: Drive folder created ({time.time() - started:.1f}s).")
         names = [os.path.basename(f.get("name") or "file") for f in files]
         # One Google call per file - done several at once rather than one after
         # another, so a folder of many files doesn't leave the client waiting.
@@ -247,11 +277,11 @@ def upload_init():
                 lambda n: gdrive_upload.create_resumable_upload_session(n, folder_id, origin=origin), names))
         uploads = [{"name": f.get("name"), "upload_url": u} for f, u in zip(files, urls)]
     except Exception as e:
-        logger.error(f"Submission {submission_id}: Drive init failed - {e}")
+        logger.error(f"Submission {submission_id}: Drive init failed after {time.time() - started:.1f}s - {e}")
         return jsonify({"error": "Could not prepare the upload right now. Please try again shortly."}), 502
 
-    logger.info(f"Submission {submission_id} (ref {reference_number}): Drive init, "
-                f"{len(uploads)} file(s), count_only={count_only}.")
+    logger.info(f"Submission {submission_id} (ref {reference_number}): Drive init done, "
+                f"{len(uploads)} upload slot(s) in {time.time() - started:.1f}s.")
 
     return jsonify({
         "drive_configured": True,
@@ -291,7 +321,7 @@ def upload_finalize():
 
     try:
         drive_files = gdrive_upload.list_files_in_folder(folder_id)
-    except gdrive_upload.GoogleDriveError as e:
+    except Exception as e:
         logger.error(f"Submission {submission_id}: listing Drive folder failed - {e}")
         return jsonify({"error": "Could not find your uploaded files. Please try again."}), 502
 
@@ -524,6 +554,20 @@ def process_submission(submission_id, saved_paths, client_note, contact, referen
 # GOOGLE_REFRESH_TOKEN. Not used again after that.
 # --------------------------------------------------------------------------
 
+@app.route("/admin/drive-check")
+def drive_check():
+    """Tests the Google Drive connection step by step, with timings.
+    Visit /admin/drive-check?key=<GDRIVE_ADMIN_KEY>."""
+    if not GDRIVE_ADMIN_KEY or request.args.get("key") != GDRIVE_ADMIN_KEY:
+        return "Not found.", 404
+    started = time.time()
+    steps = gdrive_upload.diagnose(origin=request.host_url.rstrip("/"))
+    all_ok = all(s["ok"] for s in steps)
+    logger.info(f"Drive check: {'all OK' if all_ok else 'FAILED'} in {time.time() - started:.1f}s - {steps}")
+    return jsonify({"all_ok": all_ok, "total_seconds": round(time.time() - started, 2), "steps": steps,
+                    "worker_pid": os.getpid()})
+
+
 @app.route("/admin/gdrive-auth")
 def gdrive_auth():
     if not GDRIVE_ADMIN_KEY or request.args.get("key") != GDRIVE_ADMIN_KEY:
@@ -562,10 +606,8 @@ def gdrive_callback():
     return render_template("gdrive_success.html", refresh_token=refresh_token)
 
 
-# Start the daily cleanup thread on import, not just under `python3 app.py` -
-# a production server (gunicorn, etc.) imports this module directly and never
-# runs the __main__ block below, so this must live at module level to run there too.
-threading.Thread(target=cleanup_loop, daemon=True).start()
+# The daily cleanup thread is started by _ensure_background_started() on each
+# worker's first request, not here at import time - see that function for why.
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
