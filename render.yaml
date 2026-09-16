@@ -1,0 +1,52 @@
+# Render "Blueprint" - lets Render pick up all the settings below automatically
+# when you connect this repo, instead of typing them into the dashboard by hand.
+# See README.md for the click-by-click deployment steps.
+services:
+  - type: web
+    name: client-portal
+    runtime: python
+    # NOTE: this just controls what a brand-new service gets created with from
+    # this Blueprint - it does NOT automatically match whatever plan you've
+    # since picked by hand in the Render dashboard (Settings -> Instance Type).
+    # If you've upgraded there, that's what's actually running - this line
+    # being out of date is harmless.
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    # --timeout 3600: gunicorn's default is 30 SECONDS - if a worker doesn't
+    # finish handling a request that quickly, gunicorn assumes it has hung and
+    # kills it, which looks to the client exactly like a dropped connection.
+    # A large/slow upload (still being received, or - for "count my pages" -
+    # still being analysed) can easily take much longer than 30s, so this is
+    # raised generously to match the 5GB cap. See README "Large uploads keep
+    # failing" for the full explanation.
+    # --workers 2: so Render's own health check (a HEAD / request) can still
+    # get an instant reply from the second worker while the first one is tied
+    # up on a big upload - otherwise Render can decide the service itself is
+    # unresponsive and restart it, which would look identical to this same bug.
+    startCommand: gunicorn app:app --workers 2 --timeout 3600
+    envVars:
+      # Who the report/email goes to. For more than one inbox, use a comma-
+      # separated list here, e.g. kaye@sandyboy.co.uk,sales@iprintmanage.com
+      - key: REPORT_RECIPIENT
+        value: kaye@sandyboy.co.uk
+      # Render's free web services block outbound SMTP ports entirely, so email
+      # is sent via Brevo's HTTPS API instead - see README.md "Turning on real
+      # email delivery" for the 5-minute signup + sender verification steps.
+      - key: BREVO_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      # SMTP_USERNAME/SMTP_PASSWORD are only used as a fallback (e.g. running
+      # locally, or on a paid instance where SMTP ports aren't blocked).
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      # Optional: uploads original files to a transfer service and puts a
+      # download link in the report email instead of attaching files
+      # directly (which is capped at 20MB). Skipped entirely if neither is
+      # set. If both are set, WeTransfer takes priority - see file_transfer.py.
+      - key: WETRANSFER_API_KEY
+        sync: false
+      - key: TRANSFERNOW_API_KEY
+        sync: false
