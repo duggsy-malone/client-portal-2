@@ -24,7 +24,7 @@ def build_size_summary(rows):
     standard_flags = {}
     for r in rows:
         if r.width_mm is None or r.height_mm is None:
-            label = "Not sized (unsupported/unreadable/empty)"
+            label = "Not sized (other file types, unreadable or empty - check manually)"
             is_standard = True  # not a "review this size" flag - different reason
         else:
             label = r.matched_size or "Non-standard"

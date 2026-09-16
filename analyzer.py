@@ -294,4 +294,6 @@ def analyze_file(path, original_filename):
         return DISPATCH[ext](path, original_filename)
     else:
         return [Row(original_filename, "", ext.lstrip(".").upper() or "Unknown", "Whole file",
-                     flagged=True, notes="Unsupported file type - not analysed.")]
+                     flagged=True,
+                     notes="Not a file type we can count pages for - it's included with the original "
+                           "files, please check it manually.")]

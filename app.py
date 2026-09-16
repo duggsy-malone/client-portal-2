@@ -121,13 +121,28 @@ def _validate_contact(contact, count_only):
 
 
 def _validate_file_names(names):
-    """Returns an error message string, or None if the file list is OK."""
-    if not names:
+    """Returns an error message string, or None if the file list is OK.
+
+    Any file type is accepted. Types the analyser can't count pages for
+    (e.g. .msg emails, .ai, .indd) still go to Kaye in the download link and
+    are listed in the report as 'not analysed - check manually', rather than
+    turning the client away."""
+    if not names or not any(n.strip() for n in names):
         return "No files received."
-    rejected = [n for n in names if os.path.splitext(n)[1].lower() not in SUPPORTED_EXTENSIONS]
-    if rejected:
-        return f"Unsupported file type(s): {', '.join(rejected)}"
     return None
+
+
+def _unique_dest(directory, filename):
+    """A path in `directory` for `filename` that doesn't overwrite anything
+    already saved there - so two files with the same name (e.g. from
+    different subfolders) both survive, as 'plan.pdf' and 'plan (2).pdf'."""
+    safe = os.path.basename(filename).strip() or "file"
+    stem, ext = os.path.splitext(safe)
+    candidate, n = safe, 2
+    while os.path.exists(os.path.join(directory, candidate)):
+        candidate = f"{stem} ({n}){ext}"
+        n += 1
+    return os.path.join(directory, candidate)
 
 
 @app.route("/")
@@ -168,8 +183,7 @@ def upload():
 
     saved_paths = []
     for f in uploaded_files:
-        safe_name = os.path.basename(f.filename)
-        dest = os.path.join(submission_dir, safe_name)
+        dest = _unique_dest(submission_dir, f.filename)
         f.save(dest)
         saved_paths.append(dest)
 
@@ -281,7 +295,7 @@ def upload_finalize():
     saved_paths = []
     try:
         for finfo in drive_files:
-            dest = os.path.join(submission_dir, os.path.basename(finfo["name"]))
+            dest = _unique_dest(submission_dir, finfo["name"])
             gdrive_upload.download_file(finfo["id"], dest)
             saved_paths.append(dest)
     except gdrive_upload.GoogleDriveError as e:

@@ -71,9 +71,11 @@
 
   <div class="dropzone" id="dropzone">
     <div class="icon">&#128193;</div>
-    <p><strong>Drag &amp; drop files here</strong>, or click to browse</p>
-    <p style="font-size:12px">Accepted: PDF, JPG/JPEG, ZIP, PPTX, XLSX &middot; up to 5GB total</p>
-    <input type="file" id="fileInput" multiple accept=".pdf,.jpg,.jpeg,.png,.zip,.pptx,.xlsx,.xlsm">
+    <p><strong>Drag &amp; drop files or folders here</strong>, or click to browse</p>
+    <p style="font-size:13px"><a href="#" id="chooseFolder">Choose a whole folder instead</a></p>
+    <p style="font-size:12px">Any file type &middot; up to 5GB total &middot; page counts for PDF, JPG, PNG, ZIP, PowerPoint &amp; Excel</p>
+    <input type="file" id="fileInput" multiple>
+    <input type="file" id="folderInput" webkitdirectory directory multiple>
   </div>
 
   <div class="filelist" id="filelist"></div>
@@ -146,15 +148,106 @@ const fieldInputs = {
 
 let files = [];
 
+const folderInput = document.getElementById('folderInput');
+const chooseFolderLink = document.getElementById('chooseFolder');
+
+// System clutter that ends up inside folders and should never be sent.
+const JUNK_NAMES = new Set(['.ds_store', 'thumbs.db', 'desktop.ini']);
+function isJunk(name) {
+  const lower = name.toLowerCase();
+  return lower.startsWith('.') || lower.startsWith('~$') || JUNK_NAMES.has(lower);
+}
+
+// A file from inside a folder keeps its folder path in its name, e.g.
+// "Transport/Drawings/plan.pdf" becomes "Transport - Drawings - plan.pdf", so
+// same-named files from different subfolders don't clash, and the report
+// shows where each one came from. (Doesn't copy the file's data.)
+function withPathName(file, relativePath) {
+  if (!relativePath || relativePath === file.name) return file;
+  const flat = relativePath.split('/').filter(Boolean).join(' - ');
+  return new File([file], flat, { type: file.type, lastModified: file.lastModified });
+}
+
+function readAllEntries(dirReader) {
+  // Browsers hand back a folder's contents in batches - keep asking until empty.
+  return new Promise((resolve, reject) => {
+    const all = [];
+    const readBatch = () => dirReader.readEntries(batch => {
+      if (!batch.length) return resolve(all);
+      all.push(...batch);
+      readBatch();
+    }, reject);
+    readBatch();
+  });
+}
+
+async function collectFromEntry(entry, path, out) {
+  if (isJunk(entry.name)) return;
+  if (entry.isFile) {
+    const file = await new Promise((res, rej) => entry.file(res, rej));
+    out.push(withPathName(file, path + entry.name));
+  } else if (entry.isDirectory) {
+    const children = await readAllEntries(entry.createReader());
+    for (const child of children) {
+      await collectFromEntry(child, path + entry.name + '/', out);
+    }
+  }
+}
+
 dropzone.addEventListener('click', () => fileInput.click());
+chooseFolderLink.addEventListener('click', e => {
+  e.preventDefault();
+  e.stopPropagation();
+  folderInput.click();
+});
 dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
 dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
-dropzone.addEventListener('drop', e => {
+dropzone.addEventListener('drop', async e => {
   e.preventDefault();
   dropzone.classList.remove('dragover');
-  addFiles(e.dataTransfer.files);
+  // Must be read straight away - the browser empties the drop data after this event.
+  const entries = Array.from(e.dataTransfer.items || [])
+    .map(item => item.webkitGetAsEntry ? item.webkitGetAsEntry() : null)
+    .filter(Boolean);
+  if (!entries.length) {
+    addFiles(e.dataTransfer.files);
+    return;
+  }
+  const hasFolder = entries.some(en => en.isDirectory);
+  if (hasFolder) {
+    statusEl.className = 'status';
+    statusEl.textContent = 'Reading folder...';
+  }
+  const collected = [];
+  try {
+    for (const entry of entries) await collectFromEntry(entry, '', collected);
+  } catch (err) {
+    statusEl.className = 'status error';
+    statusEl.textContent = "Couldn't read everything in that folder - try choosing the files directly instead.";
+  }
+  if (hasFolder && !collected.length) {
+    statusEl.className = 'status error';
+    statusEl.textContent = 'That folder looks empty.';
+    return;
+  }
+  addFiles(collected);
 });
-fileInput.addEventListener('change', e => addFiles(e.target.files));
+fileInput.addEventListener('change', e => {
+  addFiles(e.target.files);
+  fileInput.value = '';
+});
+folderInput.addEventListener('change', e => {
+  const picked = Array.from(e.target.files)
+    .filter(f => !(f.webkitRelativePath || f.name).split('/').some(isJunk))
+    .map(f => withPathName(f, f.webkitRelativePath));
+  folderInput.value = '';
+  if (!picked.length) {
+    statusEl.className = 'status error';
+    statusEl.textContent = 'That folder looks empty.';
+    return;
+  }
+  addFiles(picked);
+});
 
 countOnlyEl.addEventListener('change', () => {
   const isCountOnly = countOnlyEl.checked;
@@ -165,7 +258,11 @@ countOnlyEl.addEventListener('change', () => {
 });
 
 function addFiles(fileListObj) {
-  for (const f of fileListObj) files.push(f);
+  for (const f of fileListObj) {
+    // Ignore the exact same file being added twice.
+    const dup = files.some(x => x.name === f.name && x.size === f.size && x.lastModified === f.lastModified);
+    if (!dup) files.push(f);
+  }
   renderFileList();
 }
 
@@ -174,7 +271,14 @@ function renderFileList() {
   files.forEach((f, idx) => {
     const div = document.createElement('div');
     div.className = 'fileitem';
-    div.innerHTML = `<span>${f.name} (${(f.size/1024/1024).toFixed(2)} MB)</span><span class="remove" data-idx="${idx}">&#10005;</span>`;
+    const label = document.createElement('span');
+    label.textContent = `${f.name} (${(f.size/1024/1024).toFixed(2)} MB)`;
+    const remove = document.createElement('span');
+    remove.className = 'remove';
+    remove.dataset.idx = idx;
+    remove.innerHTML = '&#10005;';
+    div.appendChild(label);
+    div.appendChild(remove);
     filelistEl.appendChild(div);
   });
   filelistEl.querySelectorAll('.remove').forEach(el => {
