@@ -11,6 +11,15 @@ services:
     envVars:
       - key: REPORT_RECIPIENT
         value: kaye@sandyboy.co.uk
+      # Render's free web services block outbound SMTP ports entirely, so email
+      # is sent via Brevo's HTTPS API instead - see README.md "Turning on real
+      # email delivery" for the 5-minute signup + sender verification steps.
+      - key: BREVO_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      # SMTP_USERNAME/SMTP_PASSWORD are only used as a fallback (e.g. running
+      # locally, or on a paid instance where SMTP ports aren't blocked).
       - key: SMTP_USERNAME
         sync: false
       - key: SMTP_PASSWORD
