@@ -116,6 +116,9 @@ credit card) is far more than this needs.
    export EMAIL_FROM="the address you verified in step 2"
    export REPORT_RECIPIENT="kaye@sandyboy.co.uk"
    ```
+   To send to more than one inbox, separate them with a comma in that same variable, e.g.
+   `REPORT_RECIPIENT="kaye@sandyboy.co.uk,sales@iprintmanage.com"` (spaces around each address are fine too) -
+   every address in the list gets the report.
 5. Restart/redeploy. Submit a test file and check the inbox.
 
 ### Method B: Gmail SMTP (use this only when running locally, or on a paid instance)
@@ -126,7 +129,7 @@ Render plan - but will NOT work on Render's free tier (see above).
 ```bash
 export SMTP_USERNAME="quotes@sandyboy.co.uk"      # the Gmail address to send FROM
 export SMTP_PASSWORD="xxxx xxxx xxxx xxxx"         # a Gmail "App Password" - see below
-export REPORT_RECIPIENT="kaye@sandyboy.co.uk"      # where reports get sent TO
+export REPORT_RECIPIENT="kaye@sandyboy.co.uk"      # where reports get sent TO - comma-separate for more than one
 python3 app.py
 ```
 
@@ -206,7 +209,7 @@ all clicking through websites, no coding.
    - Still on the setup screen (or afterwards under the service's "Environment" tab), add:
      - `SMTP_USERNAME` → the Gmail address you're sending from
      - `SMTP_PASSWORD` → the Gmail App Password from the section above
-     - `REPORT_RECIPIENT` is already set to kaye@sandyboy.co.uk via `render.yaml` - change it there if needed.
+     - `REPORT_RECIPIENT` is already set to kaye@sandyboy.co.uk via `render.yaml` - change it there if needed. To add more recipients, edit that same value directly in the Environment tab to a comma-separated list, e.g. `kaye@sandyboy.co.uk,sales@iprintmanage.com` - no code change needed, just save and it redeploys.
 
 **5. Deploy**
    - Click "Create Web Service". Render will build and start it - takes a couple of minutes the first time. Watch the logs; when it says the service is live, you're done.
@@ -225,18 +228,71 @@ Cloudflare R2) later if you need to keep originals long-term.
 
 None of this needs new code - the app is already written to be deployed as-is.
 
+## Large uploads keep failing ("Upload failed - please check your connection")
+
+Two different things can cause this, and it's worth knowing both since they were tackled in order:
+
+1. **gunicorn's default 30-second request timeout.** gunicorn (the production server this app runs under on Render) assumes any request that takes longer than that to finish has hung, and kills it - which looks to the browser like a dropped connection. Fixed permanently in `render.yaml`'s `startCommand`, which raises that to 1 hour and runs 2 workers instead of 1 (`gunicorn app:app --workers 2 --timeout 3600`). Worth checking **Settings -> Start Command** in the Render dashboard matches this after deploying - `render.yaml` changes only auto-apply if Blueprint auto-sync is on for your service, otherwise paste it in there by hand.
+
+2. **Render sits behind Cloudflare, which enforces its own hard upload size limit** (commonly around 100MB) completely separately from anything Render or this app controls - a request over that size gets rejected right at the door, before it ever reaches Render's servers, gunicorn, or this app's code. This is the one that was actually causing multi-hundred-MB/GB uploads to fail instantly, with nothing at all showing up in Render's own logs (the request never got that far). No app-level setting fixes this - see the next section for the actual workaround.
+
+## Large files: Google Drive bypass
+
+Because of the Cloudflare limit above, this app can send big files a different way: straight from the client's browser to a Google Drive folder (bypassing Render/Cloudflare entirely for the actual file bytes), and then pull them back down server-side just to run the page-count analysis. WeTransfer/TransferNow (see "Getting the original files" above) is unchanged and still does the actual "here's a link to download the originals" part of the report - Drive is only ever a temporary relay to get past the edge limit, and the Drive copies are deleted again once a submission finishes processing.
+
+**Until this is set up, uploads fall back automatically to the old direct route** (still subject to the Cloudflare limit for big files, but fine for smaller ones) - so there's no rush, and nothing breaks in the meantime.
+
+### One-time setup
+
+This needs a real Google account with actual storage behind it - **not** a bare "service account" (that has zero storage of its own unless backed by a paid Workspace domain-wide delegation setup, which is its own can of worms). Since sandyboy.co.uk is on Google Workspace, authorizing this app against your own Workspace account is the way to go, and - because it's "Internal" to your own organisation - Google won't require the app to go through their public verification review.
+
+1. **Create a Google Cloud project** (free): go to https://console.cloud.google.com, and create a new project (top-left project picker -> New Project). Any name is fine, e.g. "Client Portal".
+2. **Enable the Drive API**: in that project, go to **APIs & Services -> Library**, search for "Google Drive API", and click **Enable**.
+3. **Configure the OAuth consent screen**: **APIs & Services -> OAuth consent screen**. Choose **Internal** as the User Type (this is what skips Google's verification review - it's only available because your domain is on Workspace). Fill in an app name (e.g. "Client Portal") and your email, save.
+4. **Create OAuth credentials**: **APIs & Services -> Credentials -> Create Credentials -> OAuth client ID**. Application type: **Web application**. Under **Authorized redirect URIs**, add:
+   ```
+   https://client-portal-2.onrender.com/admin/gdrive-callback
+   ```
+   (swap in your actual Render URL if it's different). Save, then copy the **Client ID** and **Client Secret** it gives you.
+5. **Set environment variables** in Render's Environment tab:
+   ```
+   GOOGLE_CLIENT_ID=<the client ID from step 4>
+   GOOGLE_CLIENT_SECRET=<the client secret from step 4>
+   GDRIVE_ADMIN_KEY=<make up any random password - this just stops strangers from finding the setup page>
+   ```
+   Save and let it redeploy.
+6. **Authorize the app against your Drive**: once redeployed, visit (in your own browser, signed into your Workspace Google account):
+   ```
+   https://client-portal-2.onrender.com/admin/gdrive-auth?key=<the GDRIVE_ADMIN_KEY you just set>
+   ```
+   Google will show its normal consent screen ("Client Portal wants access to...") - approve it. You'll land on a page showing a long **refresh token** value.
+7. **Copy that refresh token** into Render's Environment tab as one more variable:
+   ```
+   GOOGLE_REFRESH_TOKEN=<the value shown on that page>
+   ```
+   Save. Once this redeploys, large uploads switch over to the Drive bypass automatically - nothing else to change, and no client-facing difference except that big files now actually work.
+
+**That refresh token is a credential** - anyone who has it can act as this Drive connection. Don't paste it anywhere other than Render's Environment tab.
+
+### Storage/cleanup
+
+Files only ever sit in Drive briefly, mid-submission - the app deletes them (and their folder) again as soon as processing finishes, whether that's a normal quote request or a "just count my pages" check. Nothing accumulates there over time.
+
 ## Project files
 
 ```
-app.py          - Flask web server: upload endpoint, storage, cleanup, kicks off analysis+email
+app.py          - Flask web server: both upload routes, storage, cleanup, kicks off analysis+email
+gdrive_upload.py - Google Drive bypass for large files (see "Large files: Google Drive bypass")
 analyzer.py     - the core file-analysis logic (PDF/JPG/PPTX/XLSX/ZIP)
 paper_sizes.py  - reference tables of standard page/slide sizes + matching logic
 report.py       - builds the HTML email body and CSV attachment from analysis results
+reference_number.py - generates the short DDMMYY-NNNNN reference shown in reports/emails
 emailer.py      - sends the report via Brevo or SMTP (falls back to saving locally if neither configured)
 file_transfer.py     - picks WeTransfer or TransferNow for uploading originals, based on which API key is set
 wetransfer_upload.py - WeTransfer provider (for your paid account, once reachable)
 transfernow_upload.py - TransferNow provider (works now, free 14-day trial then pay-as-you-go)
 templates/index.html - the client-facing drag & drop page
+templates/gdrive_success.html - one-time page shown after authorizing Google Drive, displaying the refresh token to copy
 make_samples.py - generates the test files used to validate the analyzer (samples/)
 samples/        - sample test files (mixed standard + unusual sizes)
 uploads/        - where submitted files land (auto-deleted after 30 days)
@@ -248,7 +304,7 @@ render.yaml     - one-click deployment config for Render.com (see "Going live" b
 ## Adjusting things later
 
 - **Retention period**: change `RETENTION_DAYS` in `app.py`.
-- **Upload size cap**: change `MAX_CONTENT_LENGTH` in `app.py` (currently 5GB) and `MAX_TOTAL_BYTES` in `templates/index.html` to match. Note: Render's free tier has its own practical ceilings on request size, memory (512MB) and request duration that sit underneath this app-level cap - a very large upload can still fail or time out there even though the app itself allows it. If you're regularly expecting multi-GB submissions, a paid Render instance (more RAM, no forced sleep) is worth it; flag it to me if you hit this in practice and I'll help diagnose from the real error.
+- **Upload size cap**: change `MAX_CONTENT_LENGTH` in `app.py` (currently 5GB) and `MAX_TOTAL_BYTES` in `templates/index.html` to match. This is this app's own cap - it's separate from (and smaller than) the Cloudflare edge limit that large uploads actually run into; see "Large files: Google Drive bypass" above for what actually makes big uploads work reliably.
 - **Size tolerance** (how close to A4 counts as "A4"): change `TOLERANCE_MM` in `paper_sizes.py`.
 - **Notable sizes** (roller banners, squares, Legal->A4 grouping): `ROLLER_BANNER_BANDS`, `SQUARE_SIZES`, `LABEL_ALIASES` in `paper_sizes.py`.
 - **Required form fields**: `REQUIRED_FIELDS_ALWAYS` / `REQUIRED_FIELDS_FULL_SUBMISSION` in `app.py`, and the matching inputs in `templates/index.html`.

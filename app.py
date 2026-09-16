@@ -6,6 +6,18 @@ analysed in the background (page/slide/sheet counts + physical sizes,
 flagging anything non-standard), and a report is emailed automatically
 to whoever REPORT_RECIPIENT is set to (see emailer.py / README.md).
 
+Two ways files get here:
+  - The legacy path (`POST /upload`, one multipart request) - simple, and
+    still used automatically whenever Google Drive isn't configured (see
+    below), including local testing.
+  - The Drive-relay path (`POST /upload/init` then the browser PUTs
+    straight to Google Drive, then `POST /upload/finalize`) - used whenever
+    Drive IS configured, because Render sits behind a Cloudflare edge with
+    its own hard upload size limit that has nothing to do with this app.
+    Routing large files through Drive first, then pulling them back down
+    server-side just to analyse them, gets around that edge entirely. See
+    gdrive_upload.py and README.md "Large files: Google Drive bypass".
+
 Run locally:
     python3 app.py
 Then open http://localhost:5000
@@ -19,13 +31,15 @@ import logging
 import threading
 from datetime import datetime, timedelta
 
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, redirect, url_for
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from analyzer import analyze_file, SUPPORTED_EXTENSIONS
 from report import rows_to_csv, rows_to_html
 from emailer import send_report_email
 from file_transfer import upload_submission, FileTransferError
 from reference_number import next_reference_number
+import gdrive_upload
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("portal")
@@ -39,9 +53,11 @@ os.makedirs(REPORTS_DIR, exist_ok=True)
 MAX_CONTENT_LENGTH = 5 * 1024 * 1024 * 1024  # 5GB per submission
 RETENTION_DAYS = 30
 
+GDRIVE_ADMIN_KEY = os.environ.get("GDRIVE_ADMIN_KEY")
+
 # Fields the client-facing form always requires, and the extra two that are
 # only required for a real quote submission (not for a "just count my pages"
-# check - see the REQUIRED_FIELDS_COUNT_ONLY note in the /upload route).
+# check).
 REQUIRED_FIELDS_ALWAYS = ["subject", "full_name", "company", "email", "phone"]
 REQUIRED_FIELDS_FULL_SUBMISSION = ["deadline", "delivery_address"]
 FIELD_LABELS = {
@@ -56,6 +72,12 @@ FIELD_LABELS = {
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
+# Render (like most PaaS hosts) terminates HTTPS in front of the app and
+# forwards plain HTTP internally - without this, Flask can't tell the
+# original request was HTTPS, and url_for(..., _external=True) below (used
+# to build the Google OAuth redirect URL) would generate an http:// link
+# that Google rejects as insecure.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 
 def cleanup_old_submissions():
@@ -69,6 +91,14 @@ def cleanup_old_submissions():
             shutil.rmtree(path, ignore_errors=True)
             logger.info(f"Deleted expired submission folder: {name}")
 
+    if gdrive_upload.is_configured():
+        try:
+            removed = gdrive_upload.delete_abandoned_folders(older_than_hours=24)
+            if removed:
+                logger.info(f"Deleted {removed} abandoned Google Drive upload folder(s).")
+        except Exception as e:  # network blips etc. - just try again tomorrow
+            logger.error(f"Drive abandoned-folder cleanup failed: {e}")
+
 
 def cleanup_loop():
     while True:
@@ -77,6 +107,27 @@ def cleanup_loop():
         except Exception as e:
             logger.error(f"Cleanup error: {e}")
         time.sleep(24 * 3600)  # once a day
+
+
+def _validate_contact(contact, count_only):
+    """Returns an error message string, or None if everything required is present."""
+    required_fields = list(REQUIRED_FIELDS_ALWAYS)
+    if not count_only:
+        required_fields += REQUIRED_FIELDS_FULL_SUBMISSION
+    missing = [FIELD_LABELS[f] for f in required_fields if not contact.get(f)]
+    if missing:
+        return f"Missing required field(s): {', '.join(missing)}"
+    return None
+
+
+def _validate_file_names(names):
+    """Returns an error message string, or None if the file list is OK."""
+    if not names:
+        return "No files received."
+    rejected = [n for n in names if os.path.splitext(n)[1].lower() not in SUPPORTED_EXTENSIONS]
+    if rejected:
+        return f"Unsupported file type(s): {', '.join(rejected)}"
+    return None
 
 
 @app.route("/")
@@ -89,31 +140,27 @@ def health():
     return jsonify({"status": "ok"})
 
 
+# --------------------------------------------------------------------------
+# Legacy path: one multipart POST, file bytes go straight through this app.
+# Used automatically whenever Google Drive isn't configured (is_configured()
+# below is False) - see /upload/init, which is what the front-end actually
+# calls first to decide which path to use.
+# --------------------------------------------------------------------------
+
 @app.route("/upload", methods=["POST"])
 def upload():
     uploaded_files = request.files.getlist("files")
     client_note = request.form.get("client_note", "").strip()
     count_only = request.form.get("count_only", "").strip().lower() in ("1", "true", "on", "yes")
-
     contact = {field: request.form.get(field, "").strip() for field in FIELD_LABELS}
 
-    # Count-only submissions still need the client's name/company/email/phone/
-    # subject so Kaye can follow up if needed, but skip the deadline and
-    # delivery address since nothing is actually being quoted or sent yet.
-    required_fields = list(REQUIRED_FIELDS_ALWAYS)
-    if not count_only:
-        required_fields += REQUIRED_FIELDS_FULL_SUBMISSION
-    missing = [FIELD_LABELS[f] for f in required_fields if not contact.get(f)]
-    if missing:
-        return jsonify({"error": f"Missing required field(s): {', '.join(missing)}"}), 400
+    error = _validate_contact(contact, count_only)
+    if error:
+        return jsonify({"error": error}), 400
 
-    if not uploaded_files:
-        return jsonify({"error": "No files received."}), 400
-
-    rejected = [f.filename for f in uploaded_files
-                if os.path.splitext(f.filename)[1].lower() not in SUPPORTED_EXTENSIONS]
-    if rejected:
-        return jsonify({"error": f"Unsupported file type(s): {', '.join(rejected)}"}), 400
+    error = _validate_file_names([f.filename for f in uploaded_files])
+    if error:
+        return jsonify({"error": error}), 400
 
     submission_id = datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
     submission_dir = os.path.join(UPLOAD_DIR, submission_id)
@@ -126,25 +173,146 @@ def upload():
         f.save(dest)
         saved_paths.append(dest)
 
-    # A human-friendly, sequential reference number (DDMMYY-NNNNN) shown in the
-    # report/email - separate from submission_id, which stays the guaranteed-
-    # unique folder name. Only generated once we know this is a real, valid
-    # submission, so a rejected request doesn't burn a number.
     reference_number = next_reference_number()
 
     logger.info(f"Submission {submission_id} (ref {reference_number}): "
-                f"{len(saved_paths)} file(s) received (count_only={count_only}).")
+                f"{len(saved_paths)} file(s) received via legacy upload (count_only={count_only}).")
 
+    return _handle_received_files(submission_id, saved_paths, client_note, contact,
+                                   reference_number, count_only, on_done=None)
+
+
+# --------------------------------------------------------------------------
+# Drive-relay path: the browser gets an upload URL per file from /init, PUTs
+# the bytes straight to Google (never touching this app or Render/Cloudflare's
+# edge), then calls /finalize once done. See gdrive_upload.py for why.
+# --------------------------------------------------------------------------
+
+@app.route("/upload/init", methods=["POST"])
+def upload_init():
+    data = request.get_json(silent=True) or {}
+    count_only = bool(data.get("count_only"))
+    contact = {field: (data.get(field) or "").strip() for field in FIELD_LABELS}
+    files = data.get("files") or []  # [{"name": "...", "size": 12345}, ...]
+    file_names = [f.get("name", "") for f in files if isinstance(f, dict)]
+
+    error = _validate_contact(contact, count_only)
+    if error:
+        return jsonify({"error": error}), 400
+
+    error = _validate_file_names(file_names)
+    if error:
+        return jsonify({"error": error}), 400
+
+    total_bytes = sum(int(f.get("size") or 0) for f in files if isinstance(f, dict))
+    if total_bytes > MAX_CONTENT_LENGTH:
+        limit_gb = MAX_CONTENT_LENGTH // (1024 ** 3)
+        return jsonify({"error": f"Total size exceeds the {limit_gb}GB limit - please remove some files."}), 400
+
+    if not gdrive_upload.is_configured():
+        # Front-end falls back to POSTing straight to /upload instead.
+        return jsonify({"drive_configured": False})
+
+    submission_id = datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
+    reference_number = next_reference_number()
+
+    # The site the browser is on, e.g. https://client-portal-2.onrender.com -
+    # Google needs this to allow the browser's direct upload (see gdrive_upload.py).
+    origin = request.host_url.rstrip("/")
+
+    try:
+        folder_id = gdrive_upload.create_submission_folder(f"Portal submission {reference_number}")
+        uploads = []
+        for f in files:
+            name = os.path.basename(f.get("name") or "file")
+            upload_url = gdrive_upload.create_resumable_upload_session(name, folder_id, origin=origin)
+            uploads.append({"name": f.get("name"), "upload_url": upload_url})
+    except gdrive_upload.GoogleDriveError as e:
+        logger.error(f"Submission {submission_id}: Drive init failed - {e}")
+        return jsonify({"error": "Could not prepare the upload right now. Please try again shortly."}), 502
+
+    logger.info(f"Submission {submission_id} (ref {reference_number}): Drive init, "
+                f"{len(uploads)} file(s), count_only={count_only}.")
+
+    return jsonify({
+        "drive_configured": True,
+        "submission_id": submission_id,
+        "reference_number": reference_number,
+        "drive_folder_id": folder_id,
+        "uploads": uploads,
+    })
+
+
+@app.route("/upload/finalize", methods=["POST"])
+def upload_finalize():
+    data = request.get_json(silent=True) or {}
+    submission_id = data.get("submission_id")
+    reference_number = data.get("reference_number")
+    folder_id = data.get("drive_folder_id")
+    count_only = bool(data.get("count_only"))
+    client_note = (data.get("client_note") or "").strip()
+    raw_contact = data.get("contact") or {}
+    contact = {field: (raw_contact.get(field) or "").strip() for field in FIELD_LABELS}
+
+    if not (submission_id and reference_number and folder_id):
+        return jsonify({"error": "Missing submission details - please start again."}), 400
+
+    error = _validate_contact(contact, count_only)
+    if error:
+        return jsonify({"error": error}), 400
+
+    # submission_id comes back from the browser, so make sure it's only ever
+    # the plain id /upload/init issued - never a path like "../something".
+    if os.path.basename(submission_id) != submission_id or submission_id.startswith("."):
+        return jsonify({"error": "Invalid submission details - please start again."}), 400
+
+    try:
+        drive_files = gdrive_upload.list_files_in_folder(folder_id)
+    except gdrive_upload.GoogleDriveError as e:
+        logger.error(f"Submission {submission_id}: listing Drive folder failed - {e}")
+        return jsonify({"error": "Could not find your uploaded files. Please try again."}), 502
+
+    if not drive_files:
+        return jsonify({"error": "No files were received - please try again."}), 400
+
+    submission_dir = os.path.join(UPLOAD_DIR, submission_id)
+    os.makedirs(submission_dir, exist_ok=True)
+
+    saved_paths = []
+    try:
+        for finfo in drive_files:
+            dest = os.path.join(submission_dir, os.path.basename(finfo["name"]))
+            gdrive_upload.download_file(finfo["id"], dest)
+            saved_paths.append(dest)
+    except gdrive_upload.GoogleDriveError as e:
+        logger.error(f"Submission {submission_id}: downloading from Drive failed - {e}")
+        shutil.rmtree(submission_dir, ignore_errors=True)
+        return jsonify({"error": "Could not retrieve your uploaded files. Please try again."}), 502
+
+    file_ids = [f["id"] for f in drive_files]
+
+    def cleanup_drive():
+        gdrive_upload.cleanup_folder(folder_id, file_ids)
+
+    logger.info(f"Submission {submission_id} (ref {reference_number}): "
+                f"{len(saved_paths)} file(s) pulled back from Drive (count_only={count_only}).")
+
+    return _handle_received_files(submission_id, saved_paths, client_note, contact,
+                                   reference_number, count_only, on_done=cleanup_drive)
+
+
+def _handle_received_files(submission_id, saved_paths, client_note, contact,
+                            reference_number, count_only, on_done):
+    """Shared tail end for both upload paths, once files are sitting on local
+    disk: either analyse synchronously and return the report (count-only), or
+    hand off to a background thread for the full analyse+email+file-transfer
+    pipeline. `on_done`, if given, is called after processing finishes either
+    way (used by the Drive path to clean up the Drive copies)."""
     if count_only:
-        # "I just want to count my pages": analyse synchronously and hand the
-        # report straight back to the browser. No email to Kaye, no upload to
-        # a file-transfer provider, and the files are deleted immediately
-        # afterwards rather than kept for 30 days like a real submission.
         try:
             all_rows = []
             for path in saved_paths:
-                original_name = os.path.basename(path)
-                all_rows.extend(analyze_file(path, original_name))
+                all_rows.extend(analyze_file(path, os.path.basename(path)))
             html_body = rows_to_html(all_rows, submission_id, client_note,
                                       contact=contact, count_only=True,
                                       reference_number=reference_number)
@@ -152,18 +320,21 @@ def upload():
             logger.exception(f"Count-only submission {submission_id} failed: {e}")
             return jsonify({"error": "Something went wrong analysing your files. Please try again."}), 500
         finally:
-            shutil.rmtree(submission_dir, ignore_errors=True)
+            shutil.rmtree(os.path.join(UPLOAD_DIR, submission_id), ignore_errors=True)
+            if on_done:
+                on_done()
 
         return jsonify({"status": "counted", "submission_id": submission_id,
                          "reference_number": reference_number, "report_html": html_body})
 
-    # Run analysis + email synchronously in a background thread so the client
-    # gets an instant "received" response without waiting on the full scan.
-    thread = threading.Thread(
-        target=process_submission,
-        args=(submission_id, saved_paths, client_note, contact, reference_number),
-        daemon=True,
-    )
+    def run():
+        try:
+            process_submission(submission_id, saved_paths, client_note, contact, reference_number)
+        finally:
+            if on_done:
+                on_done()
+
+    thread = threading.Thread(target=run, daemon=True)
     thread.start()
 
     return jsonify({"status": "received", "submission_id": submission_id,
@@ -210,6 +381,52 @@ def process_submission(submission_id, saved_paths, client_note, contact, referen
         logger.info(f"Submission {submission_id}: email sent={sent} - {message}")
     except Exception as e:
         logger.exception(f"Failed to process submission {submission_id}: {e}")
+
+
+# --------------------------------------------------------------------------
+# One-time Google Drive authorization (see README.md "Large files: Google
+# Drive bypass"). Kaye visits /admin/gdrive-auth herself, once, after setting
+# GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/GDRIVE_ADMIN_KEY - the callback shows
+# the resulting refresh token once, for her to copy into
+# GOOGLE_REFRESH_TOKEN. Not used again after that.
+# --------------------------------------------------------------------------
+
+@app.route("/admin/gdrive-auth")
+def gdrive_auth():
+    if not GDRIVE_ADMIN_KEY or request.args.get("key") != GDRIVE_ADMIN_KEY:
+        return "Not found.", 404
+    redirect_uri = url_for("gdrive_callback", _external=True)
+    try:
+        auth_url = gdrive_upload.build_authorization_url(redirect_uri)
+    except gdrive_upload.GoogleDriveError as e:
+        return f"Can't start authorization: {e}", 500
+    return redirect(auth_url)
+
+
+@app.route("/admin/gdrive-callback")
+def gdrive_callback():
+    google_error = request.args.get("error")
+    if google_error:
+        return f"Google returned an error: {google_error}", 400
+    code = request.args.get("code")
+    if not code:
+        return "Missing authorization code.", 400
+
+    redirect_uri = url_for("gdrive_callback", _external=True)
+    try:
+        tokens = gdrive_upload.exchange_code_for_tokens(code, redirect_uri)
+    except gdrive_upload.GoogleDriveError as e:
+        return f"Could not complete authorization: {e}", 500
+
+    refresh_token = tokens.get("refresh_token")
+    if not refresh_token:
+        return ("Google didn't return a refresh token. This usually means this account already "
+                "authorized this app before, without the 'choose account/consent' step actually "
+                "showing - go to https://myaccount.google.com/permissions, remove this app's access, "
+                "then try this link again."), 400
+
+    # Deliberately not logged anywhere - this value is a credential.
+    return render_template("gdrive_success.html", refresh_token=refresh_token)
 
 
 # Start the daily cleanup thread on import, not just under `python3 app.py` -

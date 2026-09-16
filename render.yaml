@@ -50,3 +50,25 @@ services:
         sync: false
       - key: TRANSFERNOW_API_KEY
         sync: false
+      # Large-file bypass: Render sits behind a Cloudflare edge with its own
+      # hard upload size limit, unrelated to anything in this app. When these
+      # three are set, big files go straight from the client's browser to
+      # Google Drive instead (past that limit entirely), and the app pulls
+      # them back down just to analyse them. Until they're set, uploads fall
+      # back automatically to the old direct-to-this-app path (fine for
+      # smaller files, but still subject to that edge limit for big ones).
+      # See README.md "Large files: Google Drive bypass" for the one-time
+      # setup - GOOGLE_REFRESH_TOKEN specifically comes from visiting
+      # /admin/gdrive-auth?key=<GDRIVE_ADMIN_KEY> on the deployed app, once,
+      # after the other three are set.
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REFRESH_TOKEN
+        sync: false
+      # A password of your choosing that protects /admin/gdrive-auth from
+      # random internet traffic - make this up yourself (any random string),
+      # it doesn't come from Google.
+      - key: GDRIVE_ADMIN_KEY
+        sync: false

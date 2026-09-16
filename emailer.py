@@ -56,6 +56,14 @@ REPORT_RECIPIENT = os.environ.get("REPORT_RECIPIENT", "kaye@sandyboy.co.uk")
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024  # keep well under typical provider message caps
 
 
+def _recipient_list():
+    """REPORT_RECIPIENT can be one address, or several separated by commas
+    (e.g. "kaye@sandyboy.co.uk,sales@iprintmanage.com" - spaces around each
+    address are fine too). Splits and trims that into a clean list, dropping
+    any empty entries from a stray trailing comma."""
+    return [addr.strip() for addr in REPORT_RECIPIENT.split(",") if addr.strip()]
+
+
 def _save_fallback(html_body, csv_attachment_name, reports_dir, reason):
     os.makedirs(reports_dir, exist_ok=True)
     fallback_path = os.path.join(reports_dir, csv_attachment_name.replace(".csv", ".html"))
@@ -95,7 +103,7 @@ def _send_via_brevo(subject, html_body, csv_attachment_name, csv_attachment_byte
 
     payload = {
         "sender": {"email": EMAIL_FROM, "name": EMAIL_FROM_NAME},
-        "to": [{"email": REPORT_RECIPIENT}],
+        "to": [{"email": addr} for addr in _recipient_list()],
         "subject": subject,
         "htmlContent": body_html,
         "attachment": attachments,
@@ -120,7 +128,7 @@ def _send_via_smtp(subject, html_body, csv_attachment_name, csv_attachment_bytes
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = SMTP_USERNAME
-    msg["To"] = REPORT_RECIPIENT
+    msg["To"] = ", ".join(_recipient_list())
     msg.set_content("This email requires an HTML-capable client to view the report table.")
     msg.add_alternative(html_body, subtype="html")
     msg.add_attachment(csv_attachment_bytes, maintype="text", subtype="csv", filename=csv_attachment_name)

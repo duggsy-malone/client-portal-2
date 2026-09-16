@@ -218,7 +218,141 @@ function openReportInNewTab(html) {
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
-submitBtn.addEventListener('click', () => {
+function buildContactPayload() {
+  return {
+    subject: fieldInputs.subject.value.trim(),
+    full_name: fieldInputs.fullName.value.trim(),
+    company: fieldInputs.company.value.trim(),
+    email: fieldInputs.email.value.trim(),
+    phone: fieldInputs.phone.value.trim(),
+    deadline: fieldInputs.deadline.value.trim(),
+    delivery_address: fieldInputs.deliveryAddress.value.trim(),
+  };
+}
+
+function showError(msg) {
+  progressBar.style.display = 'none';
+  statusEl.className = 'status error';
+  statusEl.textContent = msg;
+  submitBtn.disabled = false;
+}
+
+function showSuccess(parsed, isCountOnly) {
+  progressBar.style.display = 'none';
+  const ref = parsed.reference_number;
+  if (isCountOnly) {
+    statusEl.className = 'status success';
+    statusEl.textContent = parsed.report_html
+      ? `Here's your page count${ref ? ` (reference ${ref})` : ''} - it's opened in a new tab. Nothing was sent or uploaded.`
+      : 'Page count complete, but the report could not be displayed. Please try again.';
+    if (parsed.report_html) openReportInNewTab(parsed.report_html);
+  } else {
+    statusEl.className = 'status success';
+    statusEl.textContent = `Thanks! Your files have been received${ref ? ` - your reference number is ${ref}` : ''} and we'll be in touch with a quote shortly.`;
+  }
+  filelistEl.innerHTML = '';
+  files = [];
+  document.getElementById('clientNote').value = '';
+  submitBtn.disabled = false;
+}
+
+// Small JSON request - used for /upload/init and /upload/finalize, both of
+// which only ever carry file NAMES/metadata, never the file bytes themselves.
+function postJSON(url, body) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url, true);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.onload = () => {
+      let parsed = {};
+      try { parsed = JSON.parse(xhr.responseText); } catch (e) {}
+      if (xhr.status === 200) resolve(parsed);
+      else reject(new Error(parsed.error || 'Something went wrong. Please try again.'));
+    };
+    xhr.onerror = () => reject(new Error('Something went wrong - please check your connection and try again.'));
+    xhr.send(JSON.stringify(body));
+  });
+}
+
+// Sends one file's raw bytes straight to its Google Drive upload URL - this
+// goes directly to Google, not through this site, so it isn't subject to
+// whatever upload size limit our own host might otherwise impose.
+function putFileToUrl(url, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', url, true);
+    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(e.loaded);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve();
+      else reject(new Error(`Uploading "${file.name}" failed (status ${xhr.status}). Please try again.`));
+    };
+    xhr.onerror = () => reject(new Error(`Uploading "${file.name}" failed - please check your connection and try again.`));
+    xhr.send(file);
+  });
+}
+
+// Fallback path: used automatically whenever the server reports Drive isn't
+// configured yet. One plain multipart POST, same as this app always used to do.
+function submitLegacy(isCountOnly) {
+  const formData = new FormData();
+  files.forEach(f => formData.append('files', f));
+  formData.append('client_note', document.getElementById('clientNote').value);
+  const contact = buildContactPayload();
+  Object.entries(contact).forEach(([k, v]) => formData.append(k, v));
+  formData.append('count_only', isCountOnly ? '1' : '0');
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/upload', true);
+  xhr.upload.onprogress = (e) => {
+    if (e.lengthComputable) progressBar.value = (e.loaded / e.total) * 100;
+  };
+  xhr.onload = () => {
+    let parsed = {};
+    try { parsed = JSON.parse(xhr.responseText); } catch (e) {}
+    if (xhr.status === 200) showSuccess(parsed, isCountOnly);
+    else showError(parsed.error || 'Something went wrong submitting your files. Please try again or contact us directly.');
+  };
+  xhr.onerror = () => showError('Upload failed - please check your connection and try again.');
+  xhr.send(formData);
+}
+
+// Main path: files go straight from this browser to Google Drive (one PUT
+// per file, one after another), then the server is told to pick them up
+// from there - see /upload/init and /upload/finalize in app.py.
+async function submitViaDrive(initResp, isCountOnly) {
+  const { submission_id, reference_number, drive_folder_id, uploads } = initResp;
+  const totalBytes = files.reduce((s, f) => s + f.size, 0) || 1;
+  const loadedByIndex = new Array(files.length).fill(0);
+
+  const updateProgress = () => {
+    const loaded = loadedByIndex.reduce((s, v) => s + v, 0);
+    progressBar.value = (loaded / totalBytes) * 100;
+  };
+
+  for (let i = 0; i < files.length; i++) {
+    const uploadUrl = uploads[i] && uploads[i].upload_url;
+    if (!uploadUrl) throw new Error('Missing upload destination for one of the files - please try again.');
+    await putFileToUrl(uploadUrl, files[i], (loaded) => {
+      loadedByIndex[i] = loaded;
+      updateProgress();
+    });
+    loadedByIndex[i] = files[i].size;
+    updateProgress();
+  }
+
+  const finalizeResp = await postJSON('/upload/finalize', {
+    submission_id, reference_number, drive_folder_id,
+    count_only: isCountOnly,
+    client_note: document.getElementById('clientNote').value,
+    contact: buildContactPayload(),
+  });
+  showSuccess(finalizeResp, isCountOnly);
+}
+
+submitBtn.addEventListener('click', async () => {
   const missing = missingFields();
   if (missing.length) {
     statusEl.className = 'status error';
@@ -232,63 +366,27 @@ submitBtn.addEventListener('click', () => {
   }
 
   const isCountOnly = countOnlyEl.checked;
-  const formData = new FormData();
-  files.forEach(f => formData.append('files', f));
-  formData.append('client_note', document.getElementById('clientNote').value);
-  formData.append('subject', fieldInputs.subject.value.trim());
-  formData.append('full_name', fieldInputs.fullName.value.trim());
-  formData.append('company', fieldInputs.company.value.trim());
-  formData.append('email', fieldInputs.email.value.trim());
-  formData.append('phone', fieldInputs.phone.value.trim());
-  formData.append('deadline', fieldInputs.deadline.value.trim());
-  formData.append('delivery_address', fieldInputs.deliveryAddress.value.trim());
-  formData.append('count_only', isCountOnly ? '1' : '0');
-
-  const xhr = new XMLHttpRequest();
-  xhr.open('POST', '/upload', true);
+  progressBar.value = 0;
   progressBar.style.display = 'block';
   submitBtn.disabled = true;
+  statusEl.className = 'status';
+  statusEl.textContent = '';
 
-  xhr.upload.onprogress = (e) => {
-    if (e.lengthComputable) progressBar.value = (e.loaded / e.total) * 100;
-  };
-  xhr.onload = () => {
-    progressBar.style.display = 'none';
-    if (xhr.status === 200) {
-      let parsed = {};
-      try { parsed = JSON.parse(xhr.responseText); } catch (e) {}
-      const ref = parsed.reference_number;
-      if (isCountOnly) {
-        statusEl.className = 'status success';
-        statusEl.textContent = parsed.report_html
-          ? `Here's your page count${ref ? ` (reference ${ref})` : ''} - it's opened in a new tab. Nothing was sent or uploaded.`
-          : 'Page count complete, but the report could not be displayed. Please try again.';
-        if (parsed.report_html) openReportInNewTab(parsed.report_html);
-      } else {
-        statusEl.className = 'status success';
-        statusEl.textContent = `Thanks! Your files have been received${ref ? ` - your reference number is ${ref}` : ''} and we'll be in touch with a quote shortly.`;
-      }
-      filelistEl.innerHTML = '';
-      files = [];
-      document.getElementById('clientNote').value = '';
+  try {
+    const initResp = await postJSON('/upload/init', {
+      count_only: isCountOnly,
+      ...buildContactPayload(),
+      files: files.map(f => ({ name: f.name, size: f.size })),
+    });
+
+    if (initResp.drive_configured === false) {
+      submitLegacy(isCountOnly);
     } else {
-      let errorMsg = 'Something went wrong submitting your files. Please try again or contact us directly.';
-      try {
-        const parsed = JSON.parse(xhr.responseText);
-        if (parsed.error) errorMsg = parsed.error;
-      } catch (e) {}
-      statusEl.className = 'status error';
-      statusEl.textContent = errorMsg;
-      submitBtn.disabled = false;
+      await submitViaDrive(initResp, isCountOnly);
     }
-  };
-  xhr.onerror = () => {
-    progressBar.style.display = 'none';
-    statusEl.className = 'status error';
-    statusEl.textContent = 'Upload failed - please check your connection and try again.';
-    submitBtn.disabled = false;
-  };
-  xhr.send(formData);
+  } catch (err) {
+    showError(err.message || 'Something went wrong. Please try again.');
+  }
 });
 </script>
 </body>
