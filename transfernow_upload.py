@@ -59,8 +59,25 @@ def upload_via_transfernow(file_paths, message="Client portal submission"):
     transfer_id = transfer["transferId"]
     link = transfer["link"]
 
-    for file_path, file_info in zip(file_paths, transfer["files"]):
-        _upload_one_file(transfer_id, file_path, file_info)
+    # Match each response entry back to its local file by (name, size) rather
+    # than by list position - the API isn't guaranteed to echo files back in
+    # the same order they were submitted, and uploading the wrong local
+    # file's bytes against another file's upload slot produces exactly the
+    # "wrong size" error this replaced.
+    remaining = list(file_paths)
+    for file_info in transfer["files"]:
+        match = next(
+            (p for p in remaining
+             if os.path.basename(p) == file_info["name"] and os.path.getsize(p) == file_info["size"]),
+            None
+        )
+        if match is None:
+            raise TransferNowError(
+                f"Could not match response file '{file_info['name']}' ({file_info['size']} bytes) "
+                f"back to an uploaded file."
+            )
+        remaining.remove(match)
+        _upload_one_file(transfer_id, match, file_info)
 
     finish_resp = requests.put(
         f"{BASE_URL}/transfers/{transfer_id}/upload-done",
