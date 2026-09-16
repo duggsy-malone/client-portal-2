@@ -42,7 +42,22 @@
   .status.error { color: #c0392b; }
   .status.success { background: #e8f8ef; border: 1px solid #b7e4c7; padding: 16px; border-radius: 8px; color: #1e6b3c; }
   .note { font-size: 12px; color: #90a4ae; margin-top: 24px; }
-  progress { width: 100%; height: 8px; margin-top: 10px; }
+  progress {
+    width: 100%; height: 10px; margin-top: 12px; border: none; border-radius: 5px;
+    -webkit-appearance: none; appearance: none; background: #e3e8ec; overflow: hidden;
+  }
+  progress::-webkit-progress-bar { background: #e3e8ec; border-radius: 5px; }
+  progress::-webkit-progress-value { background: var(--accent); border-radius: 5px; }
+  progress::-moz-progress-bar { background: var(--accent); border-radius: 5px; }
+  /* No percentage available yet: a highlight that sweeps across instead. */
+  progress:indeterminate {
+    background: linear-gradient(90deg, #e3e8ec 0%, #e3e8ec 30%, var(--accent) 50%, #e3e8ec 70%, #e3e8ec 100%);
+    background-size: 250% 100%;
+    animation: progress-sweep 1.3s linear infinite;
+  }
+  progress:indeterminate::-webkit-progress-bar { background: transparent; }
+  progress:indeterminate::-moz-progress-bar { background: transparent; }
+  @keyframes progress-sweep { from { background-position: 100% 0; } to { background-position: 0% 0; } }
 
   .fields { background: #fff; border: 1px solid #e0e0e0; border-radius: 12px; padding: 20px; margin-top: 20px; }
   .fields h2 { font-size: 1.05rem; color: var(--brand); margin: 0 0 14px; }
@@ -334,7 +349,36 @@ function buildContactPayload() {
   };
 }
 
+// --- Progress display ---------------------------------------------------
+// percent = a number shows a filling bar; percent = null shows an animated
+// "working on it" bar, for stages where there's no percentage to show.
+function setStage(text, percent) {
+  progressBar.style.display = 'block';
+  if (percent === null || percent === undefined) {
+    progressBar.removeAttribute('value');
+  } else {
+    progressBar.value = Math.max(0, Math.min(100, percent));
+  }
+  statusEl.className = 'status';
+  statusEl.textContent = text;
+}
+
+function formatBytes(n) {
+  if (n >= 1024 ** 3) return (n / 1024 ** 3).toFixed(2) + ' GB';
+  if (n >= 1024 ** 2) return (n / 1024 ** 2).toFixed(1) + ' MB';
+  return Math.max(1, Math.round(n / 1024)) + ' KB';
+}
+
+// Warn before closing the tab while an upload is still going.
+let busy = false;
+window.addEventListener('beforeunload', e => {
+  if (!busy) return;
+  e.preventDefault();
+  e.returnValue = '';
+});
+
 function showError(msg) {
+  busy = false;
   progressBar.style.display = 'none';
   statusEl.className = 'status error';
   statusEl.textContent = msg;
@@ -342,6 +386,7 @@ function showError(msg) {
 }
 
 function showSuccess(parsed, isCountOnly) {
+  busy = false;
   progressBar.style.display = 'none';
   const ref = parsed.reference_number;
   if (isCountOnly) {
@@ -381,9 +426,13 @@ function postJSON(url, body) {
 // Sends one file's raw bytes straight to its Google Drive upload URL - this
 // goes directly to Google, not through this site, so it isn't subject to
 // whatever upload size limit our own host might otherwise impose.
-function putFileToUrl(url, file, onProgress) {
+function putFileToUrl(url, file, onProgress, activeXhrs) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    if (activeXhrs) {
+      activeXhrs.add(xhr);
+      xhr.addEventListener('loadend', () => activeXhrs.delete(xhr));
+    }
     xhr.open('PUT', url, true);
     xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
     xhr.upload.onprogress = (e) => {
@@ -411,7 +460,12 @@ function submitLegacy(isCountOnly) {
   const xhr = new XMLHttpRequest();
   xhr.open('POST', '/upload', true);
   xhr.upload.onprogress = (e) => {
-    if (e.lengthComputable) progressBar.value = (e.loaded / e.total) * 100;
+    if (!e.lengthComputable) return;
+    const pct = (e.loaded / e.total) * 100;
+    setStage(`Uploading - ${formatBytes(e.loaded)} of ${formatBytes(e.total)} (${Math.floor(pct)}%)`, pct);
+  };
+  xhr.upload.onload = () => {
+    setStage(isCountOnly ? 'Upload complete - counting your pages...' : 'Upload complete - finishing up...', null);
   };
   xhr.onload = () => {
     let parsed = {};
@@ -428,25 +482,45 @@ function submitLegacy(isCountOnly) {
 // from there - see /upload/init and /upload/finalize in app.py.
 async function submitViaDrive(initResp, isCountOnly) {
   const { submission_id, reference_number, drive_folder_id, uploads } = initResp;
-  const totalBytes = files.reduce((s, f) => s + f.size, 0) || 1;
+  if (!uploads || uploads.length !== files.length || uploads.some(u => !u.upload_url)) {
+    throw new Error('Missing upload destination for one of the files - please try again.');
+  }
+  const totalBytes = files.reduce((s, f) => s + f.size, 0);
   const loadedByIndex = new Array(files.length).fill(0);
+  let doneCount = 0;
 
   const updateProgress = () => {
     const loaded = loadedByIndex.reduce((s, v) => s + v, 0);
-    progressBar.value = (loaded / totalBytes) * 100;
+    const pct = totalBytes ? (loaded / totalBytes) * 100 : (doneCount / files.length) * 100;
+    const countText = files.length > 1 ? `${doneCount} of ${files.length} files done - ` : '';
+    setStage(`Uploading - ${countText}${formatBytes(loaded)} of ${formatBytes(totalBytes)} (${Math.floor(pct)}%)`, pct);
   };
+  updateProgress();
 
-  for (let i = 0; i < files.length; i++) {
-    const uploadUrl = uploads[i] && uploads[i].upload_url;
-    if (!uploadUrl) throw new Error('Missing upload destination for one of the files - please try again.');
-    await putFileToUrl(uploadUrl, files[i], (loaded) => {
-      loadedByIndex[i] = loaded;
+  // Upload up to 3 files at the same time. If one fails, stop the others.
+  const activeXhrs = new Set();
+  let next = 0;
+  const worker = async () => {
+    while (next < files.length) {
+      const i = next++;
+      await putFileToUrl(uploads[i].upload_url, files[i], (loaded) => {
+        loadedByIndex[i] = loaded;
+        updateProgress();
+      }, activeXhrs);
+      loadedByIndex[i] = files[i].size;
+      doneCount++;
       updateProgress();
-    });
-    loadedByIndex[i] = files[i].size;
-    updateProgress();
+    }
+  };
+  try {
+    await Promise.all(Array.from({ length: Math.min(3, files.length) }, worker));
+  } catch (err) {
+    next = files.length;
+    activeXhrs.forEach(x => x.abort());
+    throw err;
   }
 
+  setStage(isCountOnly ? 'Upload complete - counting your pages...' : 'Upload complete - finishing up...', null);
   const finalizeResp = await postJSON('/upload/finalize', {
     submission_id, reference_number, drive_folder_id,
     count_only: isCountOnly,
@@ -470,11 +544,9 @@ submitBtn.addEventListener('click', async () => {
   }
 
   const isCountOnly = countOnlyEl.checked;
-  progressBar.value = 0;
-  progressBar.style.display = 'block';
   submitBtn.disabled = true;
-  statusEl.className = 'status';
-  statusEl.textContent = '';
+  busy = true;
+  setStage('Preparing your upload...', null);
 
   try {
     const initResp = await postJSON('/upload/init', {

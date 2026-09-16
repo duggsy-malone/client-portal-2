@@ -2,9 +2,15 @@
 from the list of Row objects produced by the analyzer."""
 
 import csv
+import html as _html
 import io
 from collections import OrderedDict
 from datetime import datetime
+
+
+def _e(v):
+    """Escape anything that came from a client (names, notes, file names) before it goes into HTML."""
+    return _html.escape("" if v is None else str(v))
 
 
 def _fmt(v):
@@ -98,7 +104,7 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
         cls = ' class="nonstandard-summary"' if not s["is_standard"] else ""
         flag_text = "&#9888; REVIEW" if not s["is_standard"] else ""
         summary_rows_html += f"""<tr{cls}>
-            <td>{s['label']}</td>
+            <td>{_e(s['label'])}</td>
             <td class="qty">{s['qty']}</td>
             <td>{flag_text}</td>
         </tr>"""
@@ -109,18 +115,18 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
         cls = ' class="flagged"' if d["flagged"] else ""
         flag_text = "&#9888; REVIEW" if d["flagged"] else ""
         detail_rows_html += f"""<tr{cls}>
-            <td>{d['source_file']}</td>
-            <td>{d['location']}</td>
-            <td>{d['file_type']}</td>
-            <td>{d['unit_label']}</td>
+            <td>{_e(d['source_file'])}</td>
+            <td>{_e(d['location'])}</td>
+            <td>{_e(d['file_type'])}</td>
+            <td>{_e(d['unit_label'])}</td>
             <td>{_fmt(d['width_mm'])}</td>
             <td>{_fmt(d['height_mm'])}</td>
-            <td>{d['matched_size']}</td>
+            <td>{_e(d['matched_size'])}</td>
             <td>{flag_text}</td>
-            <td>{d['notes']}</td>
+            <td>{_e(d['notes'])}</td>
         </tr>"""
 
-    note_html = f"<p><b>Client note:</b> {client_note}</p>" if client_note else ""
+    note_html = f"<p><b>Client note:</b> {_e(client_note)}</p>" if client_note else ""
 
     contact_html = ""
     if contact:
@@ -136,7 +142,7 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
         if contact.get("delivery_address"):
             contact_rows.append(("Delivery address", contact["delivery_address"]))
         contact_rows_html = "".join(
-            f"<tr><td><b>{label}</b></td><td>{value}</td></tr>" for label, value in contact_rows
+            f"<tr><td><b>{label}</b></td><td>{_e(value)}</td></tr>" for label, value in contact_rows
         )
         contact_html = f"""
         <h3>Client details</h3>
@@ -150,7 +156,7 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
         count_only_banner = (
             '<p style="background:#eaf3fa;border:1px solid #b8d9ec;padding:10px 14px;'
             'border-radius:8px;color:#1c5a80">This is a self-service page count only &ndash; '
-            'nothing has been emailed and no files have been uploaded anywhere.</p>'
+            'nothing has been sent to us, and your files were deleted as soon as they\'d been counted.</p>'
         )
 
     if wetransfer_link:
@@ -158,13 +164,13 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
             f'<p style="margin-top:10px"><a href="{wetransfer_link}" '
             f'style="display:inline-block;background:#2980b9;color:#fff;padding:8px 16px;'
             f'border-radius:6px;text-decoration:none;font-weight:bold">Download original files</a>'
-            f'<br><span style="font-size:11px;color:#888">Link expires in 3 days - {wetransfer_link}</span></p>'
+            f'<br><span style="font-size:11px;color:#888">{_e(wetransfer_link)}</span></p>'
         )
     elif wetransfer_error:
         files_link_html = (
             f'<p style="margin-top:10px;color:#c0392b;font-size:12px">'
-            f'Could not upload originals to WeTransfer ({wetransfer_error}). '
-            f'Small files may still be attached below; originals otherwise remain on the server.</p>'
+            f'Couldn\'t create a download link for the original files: {_e(wetransfer_error)} '
+            f'(Small files may also be attached to this email.)</p>'
         )
     else:
         files_link_html = ""

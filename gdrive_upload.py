@@ -149,19 +149,45 @@ def list_files_in_folder(folder_id):
     """Returns [{'id', 'name', 'size'}, ...] for every file currently in the
     given folder - used after the browser reports it's finished uploading,
     to find out what actually landed in Drive."""
-    resp = requests.get(
-        f"{DRIVE_API}/files",
-        headers=_headers(),
-        params={
+    files, page_token = [], None
+    while True:
+        params = {
             "q": f"'{folder_id}' in parents and trashed = false",
-            "fields": "files(id,name,size)",
+            "fields": "nextPageToken, files(id,name,size)",
             "pageSize": 1000,
-        },
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        resp = requests.get(f"{DRIVE_API}/files", headers=_headers(), params=params, timeout=REQUEST_TIMEOUT)
+        if not resp.ok:
+            raise GoogleDriveError(f"Listing files in Drive folder failed ({resp.status_code}): {resp.text}")
+        data = resp.json()
+        files.extend(data.get("files", []))
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            return files
+
+
+def rename_file(file_id, new_name):
+    """Renames a file or folder in Drive."""
+    resp = requests.patch(
+        f"{DRIVE_API}/files/{file_id}",
+        headers=_headers({"Content-Type": "application/json"}),
+        json={"name": new_name},
         timeout=REQUEST_TIMEOUT,
     )
     if not resp.ok:
-        raise GoogleDriveError(f"Listing files in Drive folder failed ({resp.status_code}): {resp.text}")
-    return resp.json().get("files", [])
+        raise GoogleDriveError(f"Renaming Drive file {file_id} failed ({resp.status_code}): {resp.text}")
+
+
+def keep_for_attention(folder_id, reference_number):
+    """Something went wrong after the client's files reached Drive, so rather
+    than deleting them, rename the folder so it's easy to spot and so the
+    abandoned-folder sweep (which only looks for 'Portal submission' folders)
+    leaves it alone. Returns the new folder name."""
+    new_name = f"NEEDS ATTENTION - quote ref {reference_number}"
+    rename_file(folder_id, new_name)
+    return new_name
 
 
 def download_file(file_id, dest_path):

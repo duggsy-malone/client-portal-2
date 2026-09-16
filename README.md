@@ -276,7 +276,15 @@ This needs a real Google account with actual storage behind it - **not** a bare 
 
 ### Storage/cleanup
 
-Files only ever sit in Drive briefly, mid-submission - the app deletes them (and their folder) again as soon as processing finishes, whether that's a normal quote request or a "just count my pages" check. Nothing accumulates there over time.
+Files normally only sit in Drive briefly. For a quote request, the client is told "received" as soon as their upload reaches Drive; the app then pulls the files down in the background, analyses them, creates the TransferNow/WeTransfer link and emails you. The Drive copies are deleted only once that download link exists. For "just count my pages", they're deleted as soon as the pages are counted.
+
+**If something goes wrong after the client has been told "received"** (Google can't be reached to pull the files back, or TransferNow/WeTransfer fails), the files are **not** deleted. The folder is renamed **"NEEDS ATTENTION - quote ref …"** in your Google Drive, and the email you get says so. Grab the files from there, then delete the folder yourself once you're done.
+
+Folders from uploads a client started but never finished (closed the tab, lost connection) are removed automatically after 24 hours. "NEEDS ATTENTION" folders are never touched by that cleanup.
+
+### What the client sees while uploading
+
+"Preparing your upload..." (animated bar), then "Uploading - 2 of 5 files done - 120 MB of 480 MB (25%)" with a filling bar, then "Upload complete - finishing up..." (or "counting your pages...") until it's done. Up to 3 files upload at once. If they try to close the tab mid-upload, the browser asks them to confirm.
 
 ## Project files
 

@@ -28,7 +28,10 @@ import time
 import uuid
 import shutil
 import logging
+import re
+import html as html_lib
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
 from flask import Flask, request, jsonify, render_template, redirect, url_for
@@ -236,12 +239,14 @@ def upload_init():
 
     try:
         folder_id = gdrive_upload.create_submission_folder(f"Portal submission {reference_number}")
-        uploads = []
-        for f in files:
-            name = os.path.basename(f.get("name") or "file")
-            upload_url = gdrive_upload.create_resumable_upload_session(name, folder_id, origin=origin)
-            uploads.append({"name": f.get("name"), "upload_url": upload_url})
-    except gdrive_upload.GoogleDriveError as e:
+        names = [os.path.basename(f.get("name") or "file") for f in files]
+        # One Google call per file - done several at once rather than one after
+        # another, so a folder of many files doesn't leave the client waiting.
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            urls = list(pool.map(
+                lambda n: gdrive_upload.create_resumable_upload_session(n, folder_id, origin=origin), names))
+        uploads = [{"name": f.get("name"), "upload_url": u} for f, u in zip(files, urls)]
+    except Exception as e:
         logger.error(f"Submission {submission_id}: Drive init failed - {e}")
         return jsonify({"error": "Could not prepare the upload right now. Please try again shortly."}), 502
 
@@ -279,6 +284,10 @@ def upload_finalize():
     # the plain id /upload/init issued - never a path like "../something".
     if os.path.basename(submission_id) != submission_id or submission_id.startswith("."):
         return jsonify({"error": "Invalid submission details - please start again."}), 400
+    # Same for the Drive folder id and reference - these go into Drive searches
+    # and folder names, so only accept the plain shapes /upload/init hands out.
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", str(folder_id)) or not re.fullmatch(r"[0-9-]+", str(reference_number)):
+        return jsonify({"error": "Invalid submission details - please start again."}), 400
 
     try:
         drive_files = gdrive_upload.list_files_in_folder(folder_id)
@@ -289,30 +298,123 @@ def upload_finalize():
     if not drive_files:
         return jsonify({"error": "No files were received - please try again."}), 400
 
-    submission_dir = os.path.join(UPLOAD_DIR, submission_id)
-    os.makedirs(submission_dir, exist_ok=True)
+    logger.info(f"Submission {submission_id} (ref {reference_number}): "
+                f"{len(drive_files)} file(s) confirmed in Drive (count_only={count_only}).")
 
-    saved_paths = []
+    if not count_only:
+        # A real quote request: the client's files are safely in Drive now, so
+        # tell them straight away and do the slow part (pulling everything back
+        # down, analysing, TransferNow, email) in the background.
+        thread = threading.Thread(
+            target=_process_drive_submission,
+            args=(submission_id, reference_number, folder_id, drive_files, client_note, contact),
+            daemon=True,
+        )
+        thread.start()
+        return jsonify({"status": "received", "submission_id": submission_id,
+                         "reference_number": reference_number, "files": len(drive_files)})
+
+    # "Count my pages": the client is waiting for the report, so do it now.
+    submission_dir = os.path.join(UPLOAD_DIR, submission_id)
     try:
-        for finfo in drive_files:
-            dest = _unique_dest(submission_dir, finfo["name"])
-            gdrive_upload.download_file(finfo["id"], dest)
-            saved_paths.append(dest)
-    except gdrive_upload.GoogleDriveError as e:
+        saved_paths = _download_from_drive(submission_dir, drive_files)
+    except Exception as e:
         logger.error(f"Submission {submission_id}: downloading from Drive failed - {e}")
         shutil.rmtree(submission_dir, ignore_errors=True)
+        gdrive_upload.cleanup_folder(folder_id, [f["id"] for f in drive_files])
         return jsonify({"error": "Could not retrieve your uploaded files. Please try again."}), 502
 
+    return _handle_received_files(
+        submission_id, saved_paths, client_note, contact, reference_number, count_only=True,
+        on_done=lambda: gdrive_upload.cleanup_folder(folder_id, [f["id"] for f in drive_files]))
+
+
+def _download_from_drive(submission_dir, drive_files):
+    """Pulls each Drive file down into submission_dir, a few at a time.
+    Returns the local paths. Raises if any download fails."""
+    os.makedirs(submission_dir, exist_ok=True)
+    # Pick every destination name up front, one at a time, so two same-named
+    # files can't both claim the same path while downloading in parallel.
+    dests = []
+    for finfo in drive_files:
+        dest = _unique_dest(submission_dir, finfo["name"])
+        open(dest, "wb").close()  # reserve the name
+        dests.append(dest)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda pair: gdrive_upload.download_file(pair[0]["id"], pair[1]),
+                      zip(drive_files, dests)))
+    return dests
+
+
+def _process_drive_submission(submission_id, reference_number, folder_id, drive_files, client_note, contact):
+    """Background half of a Drive-route quote request. The Drive copies are
+    only deleted once the originals have definitely reached Kaye another way
+    (a TransferNow/WeTransfer link). If anything goes wrong before that, the
+    files are kept in Drive under a clearly-named folder instead, and she's
+    told, so a client's files are never lost after they've been told
+    'received'."""
+    submission_dir = os.path.join(UPLOAD_DIR, submission_id)
     file_ids = [f["id"] for f in drive_files]
 
-    def cleanup_drive():
+    try:
+        saved_paths = _download_from_drive(submission_dir, drive_files)
+    except Exception as e:
+        logger.error(f"Submission {submission_id}: downloading from Drive failed - {e}")
+        folder_name = _keep_in_drive(folder_id, reference_number, submission_id)
+        _send_alert(
+            reference_number,
+            f"Couldn't process quote request {reference_number} automatically",
+            f"<p>A client's upload for quote request <b>{reference_number}</b> reached Google Drive, "
+            f"but the portal couldn't pull the files back down to analyse them "
+            f"(<code>{html_lib.escape(str(e))}</code>).</p>"
+            f"<p>Nothing is lost: the files are in your Google Drive in the folder "
+            f"<b>{folder_name or 'Portal submission ' + reference_number}</b>.</p>"
+            + _contact_html(contact, client_note),
+        )
+        return
+
+    delivered = process_submission(
+        submission_id, saved_paths, client_note, contact, reference_number,
+        on_link_failed=lambda: _keep_in_drive_note(folder_id, reference_number, submission_id),
+    )
+    if delivered:
         gdrive_upload.cleanup_folder(folder_id, file_ids)
 
-    logger.info(f"Submission {submission_id} (ref {reference_number}): "
-                f"{len(saved_paths)} file(s) pulled back from Drive (count_only={count_only}).")
 
-    return _handle_received_files(submission_id, saved_paths, client_note, contact,
-                                   reference_number, count_only, on_done=cleanup_drive)
+def _keep_in_drive(folder_id, reference_number, submission_id):
+    try:
+        return gdrive_upload.keep_for_attention(folder_id, reference_number)
+    except Exception as e:
+        logger.error(f"Submission {submission_id}: couldn't rename Drive folder for attention - {e}")
+        return None
+
+
+def _keep_in_drive_note(folder_id, reference_number, submission_id):
+    name = _keep_in_drive(folder_id, reference_number, submission_id)
+    shown = name or f"Portal submission {reference_number}"
+    return f"The original files have been kept in your Google Drive, in the folder '{shown}'."
+
+
+def _contact_html(contact, client_note):
+    rows = "".join(f"<tr><td><b>{FIELD_LABELS[k]}</b></td><td>{html_lib.escape(contact.get(k, ''))}</td></tr>"
+                   for k in FIELD_LABELS if contact.get(k))
+    note = f"<p><b>Client note:</b> {html_lib.escape(client_note)}</p>" if client_note else ""
+    return f"<h3>Client details</h3><table>{rows}</table>{note}"
+
+
+def _send_alert(reference_number, subject, html_body):
+    try:
+        sent, message = send_report_email(
+            subject=f"[Quote request {reference_number}] {subject}",
+            html_body=f"<html><body style='font-family:Arial,sans-serif'>{html_body}</body></html>",
+            csv_attachment_name=f"alert_{reference_number}.csv",
+            csv_attachment_bytes=f"Quote request,{reference_number}\nStatus,Needs attention\n".encode("utf-8"),
+            original_files=[],
+            reports_dir=REPORTS_DIR,
+        )
+        logger.info(f"Alert for {reference_number}: sent={sent} - {message}")
+    except Exception as e:
+        logger.exception(f"Couldn't send alert for {reference_number}: {e}")
 
 
 def _handle_received_files(submission_id, saved_paths, client_note, contact,
@@ -355,19 +457,32 @@ def _handle_received_files(submission_id, saved_paths, client_note, contact,
                      "reference_number": reference_number, "files": len(saved_paths)})
 
 
-def process_submission(submission_id, saved_paths, client_note, contact, reference_number):
+def process_submission(submission_id, saved_paths, client_note, contact, reference_number,
+                       on_link_failed=None):
+    """Analyse, get a download link for the originals, email the report.
+    Returns True only if the originals definitely reached Kaye via a
+    download link. `on_link_failed`, if given, is called when they didn't,
+    and may return a sentence to add to the report (used by the Drive route
+    to say where the files have been kept instead)."""
+    wetransfer_link = None
     try:
         all_rows = []
         for path in saved_paths:
             original_name = os.path.basename(path)
             all_rows.extend(analyze_file(path, original_name))
 
-        wetransfer_link, wetransfer_error = None, None
+        wetransfer_error = None
         try:
             wetransfer_link = upload_submission(saved_paths, message=f"Quote request {reference_number}")
-        except FileTransferError as e:
+        except Exception as e:
             wetransfer_error = str(e)
             logger.error(f"Submission {submission_id}: file transfer upload failed - {wetransfer_error}")
+
+        if not wetransfer_link and on_link_failed:
+            kept_note = on_link_failed()
+            if kept_note:
+                wetransfer_error = f"{wetransfer_error}. {kept_note}" if wetransfer_error else kept_note
+            on_link_failed = None  # already handled - don't run again below
 
         html_body = rows_to_html(all_rows, submission_id, client_note,
                                   wetransfer_link=wetransfer_link, wetransfer_error=wetransfer_error,
@@ -395,6 +510,10 @@ def process_submission(submission_id, saved_paths, client_note, contact, referen
         logger.info(f"Submission {submission_id}: email sent={sent} - {message}")
     except Exception as e:
         logger.exception(f"Failed to process submission {submission_id}: {e}")
+        if on_link_failed:  # not already handled above - keep the Drive copies safe
+            on_link_failed()
+        return False
+    return bool(wetransfer_link)
 
 
 # --------------------------------------------------------------------------
