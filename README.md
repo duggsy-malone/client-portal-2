@@ -67,9 +67,34 @@ HTML file instead of being sent, so you can see exactly what it looks like.
 ## Turning on real email delivery
 
 The portal is a standalone program - it can't use Claude's Gmail connection
-from this chat (that only exists inside this conversation). To send real
-emails itself it needs its own mail credentials, set as environment
-variables before starting it:
+from this chat (that only exists inside this conversation). It needs its own
+way to send mail, and there are two supported methods - use whichever fits
+where you're running it.
+
+### Method A: Brevo (use this on Render, or anywhere hosted)
+
+Render's **free** web services block outbound traffic on the old SMTP ports
+(25/465/587) entirely, as an anti-abuse measure - so a normal Gmail SMTP
+login will always fail there with "Network is unreachable", no matter how
+correct the credentials are. Brevo sends email over a normal HTTPS request
+instead, which isn't blocked, and its free plan (300 emails/day, forever, no
+credit card) is far more than this needs.
+
+1. Sign up free at https://www.brevo.com (no credit card needed).
+2. Verify a sender address: in Brevo, go to **Senders, Domains & Dedicated IPs → Senders → Add a sender**, enter the email address you want reports to appear FROM (e.g. your own Gmail, or `quotes@sandyboy.co.uk`), and click the confirmation link Brevo emails to that address.
+3. Get an API key: go to **Settings → API Keys → Generate a new API key**, name it "client portal", and copy it.
+4. Set these as environment variables (in Render: Environment tab → Add variable; locally: `export` before running):
+   ```bash
+   export BREVO_API_KEY="xkeysib-xxxxxxxxxxxxxxxx"
+   export EMAIL_FROM="the address you verified in step 2"
+   export REPORT_RECIPIENT="kaye@sandyboy.co.uk"
+   ```
+5. Restart/redeploy. Submit a test file and check the inbox.
+
+### Method B: Gmail SMTP (use this only when running locally, or on a paid instance)
+
+This works when SMTP ports aren't blocked - your own computer, or a paid
+Render plan - but will NOT work on Render's free tier (see above).
 
 ```bash
 export SMTP_USERNAME="quotes@sandyboy.co.uk"      # the Gmail address to send FROM
@@ -83,10 +108,10 @@ python3 app.py
 2. Go to https://myaccount.google.com/apppasswords, sign in, create a new app password (name it "quote portal"), and copy the 16-character code.
 3. Use that code as `SMTP_PASSWORD` above (not your normal Gmail password).
 
-If you'd rather use a proper transactional email service (recommended once
-volume grows, since Gmail has sending limits) - SendGrid, Postmark, Amazon
-SES all work - swap the `smtplib` call in `emailer.py` for that service's API;
-the rest of the app doesn't need to change.
+If both `BREVO_API_KEY`+`EMAIL_FROM` and `SMTP_USERNAME`+`SMTP_PASSWORD` are
+set, Brevo is used first; SMTP is only a fallback. If neither is set, reports
+are saved to the `reports/` folder instead of being emailed, so uploads still
+work while you're getting one of these set up.
 
 ## Going live on Render (free), step by step
 
