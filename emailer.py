@@ -193,3 +193,60 @@ def send_report_email(subject, html_body, csv_attachment_name, csv_attachment_by
     )
     logger.warning(msg)
     return False, msg
+
+
+# Optional: where clients' replies to confirmation emails should go, e.g.
+# sales@iprintmanage.com. Without it, replies go to EMAIL_FROM.
+EMAIL_REPLY_TO = os.environ.get("EMAIL_REPLY_TO")
+
+
+def send_client_email(to_address, subject, html_body):
+    """A short email to a CLIENT (not the report inbox) - e.g. their
+    confirmation or submission-history link. No attachments.
+    Returns (sent: bool, message: str). Never raises."""
+    to_address = (to_address or "").strip()
+    if not to_address or "@" not in to_address:
+        return False, "No valid client email address."
+    try:
+        if BREVO_API_KEY and EMAIL_FROM:
+            payload = {
+                "sender": {"email": EMAIL_FROM, "name": EMAIL_FROM_NAME},
+                "to": [{"email": to_address}],
+                "subject": subject,
+                "htmlContent": html_body,
+            }
+            if EMAIL_REPLY_TO:
+                payload["replyTo"] = {"email": EMAIL_REPLY_TO}
+            req = urllib.request.Request(
+                BREVO_API_URL,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"api-key": BREVO_API_KEY, "Content-Type": "application/json",
+                         "Accept": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                resp.read()
+            return True, "Client email sent via Brevo."
+        if SMTP_USERNAME and SMTP_PASSWORD:
+            msg = EmailMessage()
+            msg["Subject"] = subject
+            msg["From"] = SMTP_USERNAME
+            msg["To"] = to_address
+            if EMAIL_REPLY_TO:
+                msg["Reply-To"] = EMAIL_REPLY_TO
+            msg.set_content("This email needs an HTML-capable email program to display.")
+            msg.add_alternative(html_body, subtype="html")
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
+                server.starttls()
+                server.login(SMTP_USERNAME, SMTP_PASSWORD)
+                server.send_message(msg)
+            return True, "Client email sent via SMTP."
+        logger.warning(f"No email method configured - client email to {to_address} not sent.")
+        return False, "No email method configured."
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        logger.error(f"Client email failed (Brevo {e.code}: {body})")
+        return False, f"Brevo send failed ({e.code})."
+    except Exception as e:
+        logger.error(f"Client email failed ({e})")
+        return False, f"Send failed ({e})."

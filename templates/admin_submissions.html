@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex">
+<title>All submissions</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; background: #f4f6f8; margin: 0; color: #222; }
+  .wrap { max-width: 1200px; margin: 32px auto; padding: 0 16px; }
+  h1 { font-size: 1.4rem; color: #2c3e50; margin: 0 0 12px; }
+  .nav { text-align: right; font-size: 14px; margin: 0; }
+  a { color: #2980b9; }
+  form.search { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  form.search input[type=text] { flex: 1; min-width: 220px; padding: 9px 10px; border: 1px solid #ccc; border-radius: 8px; font-size: 14px; }
+  form.search select, form.search button { padding: 9px 12px; border-radius: 8px; border: 1px solid #ccc; font-size: 14px; background: #fff; }
+  form.search button { background: #2980b9; color: #fff; border-color: #2980b9; cursor: pointer; }
+  .count { font-size: 13px; color: #555; margin-bottom: 8px; }
+  .tablewrap { overflow-x: auto; background: #fff; border: 1px solid #e0e0e0; border-radius: 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #eee; vertical-align: top; }
+  th { background: #2c3e50; color: #fff; white-space: nowrap; }
+  td.num { text-align: right; }
+  .badge { font-size: 12px; padding: 2px 8px; border-radius: 10px; color: #fff; background: #7f8c8d; white-space: nowrap; }
+  .badge.sent, .badge.done { background: #27ae60; }
+  .badge.processing, .badge.received { background: #2980b9; }
+  .badge.needs_attention, .badge.failed { background: #c0392b; }
+  .small { color: #777; font-size: 12px; }
+  .stage { color: #1c5a80; font-size: 12px; }
+  .empty { background: #fff; border: 1px solid #e0e0e0; border-radius: 12px; padding: 24px; color: #555; }
+  .plans { display: inline-block; margin-top: 3px; font-size: 11px; font-weight: bold; padding: 1px 7px; border-radius: 8px; }
+  .plans.scale { background: #1e3a5f; color: #fff; }
+  .plans.a3 { background: #f39c12; color: #222; }
+  .pager { margin-top: 12px; font-size: 14px; display: flex; gap: 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="nav"><a href="{{ url_for('attention', key=key) }}">Uploads in progress / needing attention &rarr;</a></p>
+  <h1>All submissions</h1>
+
+  {% if storage_missing %}
+    <div class="empty">Cloudflare R2 isn't set up, so submission history isn't being recorded.</div>
+  {% else %}
+  <form class="search" method="get">
+    <input type="hidden" name="key" value="{{ key }}">
+    <input type="text" name="q" value="{{ q }}" placeholder="Search reference, email, company, name, subject or phone">
+    <select name="kind">
+      <option value="" {% if not kind %}selected{% endif %}>Quotes and page counts</option>
+      <option value="quote" {% if kind == 'quote' %}selected{% endif %}>Quote requests only</option>
+      <option value="count" {% if kind == 'count' %}selected{% endif %}>Page counts only</option>
+    </select>
+    <button type="submit">Search</button>
+    {% if q or kind %}<a href="{{ url_for('admin_submissions', key=key) }}" style="align-self:center">Clear</a>{% endif %}
+  </form>
+
+  <div class="count">{{ total }} submission{{ '' if total == 1 else 's' }}{% if q %} matching "{{ q }}"{% endif %}</div>
+
+  {% if not rows %}
+    <div class="empty">{% if q or kind %}Nothing matches that search.{% else %}No submissions recorded yet - they'll appear here from now on.{% endif %}</div>
+  {% else %}
+  <div class="tablewrap"><table>
+    <tr><th>Date (UTC)</th><th>Reference</th><th>Type</th><th>Client</th><th>Subject</th><th>Files</th><th>Pages / sheets</th><th>Tabs / dividers</th><th>Status</th><th>Links</th></tr>
+    {% for r in rows %}
+    <tr>
+      <td style="white-space:nowrap">{{ r.created }}</td>
+      <td style="white-space:nowrap"><b>{{ r.reference_number }}</b></td>
+      <td>{{ 'Page count' if r.kind == 'count' else 'Quote' }}</td>
+      <td>{{ r.contact.full_name }}{% if r.contact.company %}<br><span class="small">{{ r.contact.company }}</span>{% endif %}
+          <br><span class="small">{{ r.contact.email }}{% if r.contact.phone %} &middot; {{ r.contact.phone }}{% endif %}</span></td>
+      <td>{{ r.contact.subject }}{% if r.contact.deadline %}<br><span class="small">Deadline {{ r.contact.deadline }}</span>{% endif %}
+          {% if r.plans_to_scale is true %}<br><span class="plans scale">TO SCALE</span>{% elif r.plans_to_scale is false %}<br><span class="plans a3">A3 FOLDED</span>{% endif %}</td>
+      <td class="num">{{ r.file_count if r.file_count is not none else '' }}</td>
+      <td class="num">{{ "{:,}".format(r.total_items) if r.total_items is not none else '' }}{% if r.sheets is not none %}<br><span class="small">{{ "{:,}".format(r.sheets) }} sheets</span>{% endif %}{% if r.flagged %}<br><span class="small">{{ r.flagged }} flagged</span>{% endif %}</td>
+      <td class="num">{% if r.tabs is not none %}{{ r.tabs }} / {{ r.dividers }}{% endif %}</td>
+      <td><span class="badge {{ r.status }}">{{ r.status_label }}</span>
+          {% if r.stage and r.status == 'processing' %}<br><span class="stage">{{ r.stage }}</span>{% endif %}</td>
+      <td style="white-space:nowrap">
+        {% if r.has_report %}<a href="{{ url_for('admin_submission_report', sid=r.submission_id, key=key) }}" target="_blank" rel="noopener">Report</a><br>{% endif %}
+        {% if r.transfer_link %}<a href="{{ r.transfer_link }}" target="_blank" rel="noopener">Files</a>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% if pages > 1 %}
+  <div class="pager">
+    {% if page > 1 %}<a href="{{ url_for('admin_submissions', key=key, q=q, kind=kind, page=page-1) }}">&larr; Newer</a>{% endif %}
+    <span>Page {{ page }} of {{ pages }}</span>
+    {% if page < pages %}<a href="{{ url_for('admin_submissions', key=key, q=q, kind=kind, page=page+1) }}">Older &rarr;</a>{% endif %}
+  </div>
+  {% endif %}
+  {% endif %}
+  {% endif %}
+</div>
+</body>
+</html>

@@ -36,6 +36,12 @@ services:
         sync: false
       - key: EMAIL_FROM
         sync: false
+      # Optional: the sender name clients see on confirmation emails (e.g.
+      # iPrintManage), and where their replies go (e.g. sales@iprintmanage.com).
+      - key: EMAIL_FROM_NAME
+        sync: false
+      - key: EMAIL_REPLY_TO
+        sync: false
       # SMTP_USERNAME/SMTP_PASSWORD are only used as a fallback (e.g. running
       # locally, or on a paid instance where SMTP ports aren't blocked).
       - key: SMTP_USERNAME

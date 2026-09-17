@@ -77,10 +77,46 @@
     font-size: 13px; color: #1c5a80; cursor: pointer;
   }
   .count-only-toggle input { margin-top: 2px; }
+  .fileitem .info { min-width: 0; overflow-wrap: anywhere; }
+  .fileitem .warn { display: block; margin-top: 4px; font-size: 12px; color: #8a5a00; }
+  .fileitem.suspicious { border-color: #f3d27a; background: #fffbef; }
+  .confirm-files {
+    display: flex; align-items: flex-start; gap: 10px; margin-top: 4px;
+    background: #fff8e6; border: 1px solid #f3d27a; border-radius: 8px; padding: 12px 14px;
+    font-size: 14px; color: #5c4400; cursor: pointer;
+  }
+  .confirm-files input { margin-top: 3px; width: 16px; height: 16px; flex: none; }
+  .confirm-files.ticked { background: #e8f8ef; border-color: #b7e4c7; color: #1e6b3c; }
+  .popup-note {
+    margin-top: 8px; font-size: 13px; color: #1c5a80; background: #eaf3fa;
+    border: 1px solid #b8d9ec; border-radius: 8px; padding: 10px 14px;
+  }
+  .plans-box {
+    display: flex; align-items: center; gap: 14px; margin-top: 18px;
+    background: #fff4d6; border: 3px solid #f39c12; border-radius: 10px; padding: 16px 18px;
+    cursor: pointer; box-shadow: 0 2px 0 rgba(243,156,18,.25);
+  }
+  .plans-box input { width: 24px; height: 24px; flex: none; accent-color: #1e3a5f; cursor: pointer; }
+  .plans-box .plans-title { display: block; font-size: 18px; font-weight: 800; letter-spacing: .02em; color: #7a4a00; }
+  .plans-box .plans-sub { display: block; font-size: 13px; color: #6b4b12; margin-top: 3px; }
+  .plans-box.ticked { background: #e7eef7; border-color: #1e3a5f; }
+  .plans-box.ticked .plans-title { color: #1e3a5f; }
+  .plans-box.ticked .plans-sub { color: #33506f; }
+  .files-added { margin-top: 10px; font-size: 14px; color: #1e6b3c; background: #e8f8ef; border: 1px solid #b7e4c7; border-radius: 8px; padding: 9px 14px; }
+  .files-added a { color: #1e6b3c; font-weight: 600; }
+  .list-heading { font-size: 1.05rem; color: var(--brand); margin: 26px 0 0; }
+  .submit-hint { font-size: 12px; color: #78909c; text-align: center; margin-top: 6px; }
+  .toplink { text-align: right; font-size: 14px; margin: 0; }
+  .toplink a, .status a { color: var(--accent); }
+  button.open-report {
+    margin-top: 12px; padding: 10px 16px; border: none; border-radius: 8px;
+    background: #1e6b3c; color: #fff; font-size: 15px; cursor: pointer;
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
+  <p class="toplink"><a href="/my-submissions">My submissions</a></p>
   <h1>Send us your files for a quote</h1>
   <p class="lede">Drop your PDF, JPG, ZIP, PowerPoint or Excel files below and we'll get back to you with a quote.</p>
 
@@ -93,7 +129,7 @@
     <input type="file" id="folderInput" webkitdirectory directory multiple>
   </div>
 
-  <div class="filelist" id="filelist"></div>
+  <div class="files-added" id="filesAdded" style="display:none"></div>
 
   <div class="fields">
     <h2>Your details</h2>
@@ -129,7 +165,27 @@
 
   <textarea id="clientNote" placeholder="Anything we should know about this job? (optional)"></textarea>
 
+  <label class="plans-box" id="plansBox">
+    <input type="checkbox" id="plansToScale">
+    <span class="plans-text"><span class="plans-title">&#128208; PLANS PRINTED TO SCALE</span>
+      <span class="plans-sub">If left unticked, plans will be printed to <b>A3 and folded</b>. This affects your quote.</span></span>
+  </label>
+
+  <h2 class="list-heading" id="listHeading" style="display:none">Your files</h2>
+  <div class="filelist" id="filelist"></div>
+  <label class="confirm-files" id="confirmFilesWrap" style="display:none">
+    <input type="checkbox" id="confirmFiles">
+    <span><b>I've checked my file list and I can see all of my files present.</b><br>
+      <span style="font-size:12px">Please look through the list above before you submit &ndash; only the files listed will be sent.</span></span>
+  </label>
+  <div class="popup-note" id="popupNote" style="display:none">
+    <b>Heads up:</b> your report will open in a new tab. If your browser blocks pop-ups, please allow them for this site
+    &ndash; or use the &ldquo;Open my report&rdquo; button that appears when it's ready.
+  </div>
+
+
   <button class="submit" id="submitBtn" disabled>Submit for quote</button>
+  <div class="submit-hint" id="submitHint" style="display:none"></div>
   <progress id="progressBar" value="0" max="100" style="display:none"></progress>
   <div id="status"></div>
 
@@ -144,6 +200,15 @@ const submitBtn = document.getElementById('submitBtn');
 const statusEl = document.getElementById('status');
 const progressBar = document.getElementById('progressBar');
 const MAX_TOTAL_BYTES = 5 * 1024 * 1024 * 1024;
+const confirmFilesEl = document.getElementById('confirmFiles');
+const confirmFilesWrap = document.getElementById('confirmFilesWrap');
+const popupNoteEl = document.getElementById('popupNote');
+const submitHintEl = document.getElementById('submitHint');
+const plansBoxEl = document.getElementById('plansBox');
+const plansToScaleEl = document.getElementById('plansToScale');
+const filesAddedEl = document.getElementById('filesAdded');
+const listHeadingEl = document.getElementById('listHeading');
+plansToScaleEl.addEventListener('change', () => plansBoxEl.classList.toggle('ticked', plansToScaleEl.checked));
 
 const countOnlyEl = document.getElementById('countOnly');
 const deadlineField = document.getElementById('deadlineField');
@@ -177,10 +242,20 @@ function isJunk(name) {
 // "Transport/Drawings/plan.pdf" becomes "Transport - Drawings - plan.pdf", so
 // same-named files from different subfolders don't clash, and the report
 // shows where each one came from. (Doesn't copy the file's data.)
+// The folder is also remembered separately (file._folder, e.g.
+// "Transport/Drawings"), because the name alone can't show it reliably - a
+// file name can contain " - " too. It's used for the tabs, dividers and
+// folder diagram in the report.
 function withPathName(file, relativePath) {
-  if (!relativePath || relativePath === file.name) return file;
-  const flat = relativePath.split('/').filter(Boolean).join(' - ');
-  return new File([file], flat, { type: file.type, lastModified: file.lastModified });
+  if (!relativePath || relativePath === file.name) {
+    file._folder = '';
+    return file;
+  }
+  const parts = relativePath.split('/').filter(Boolean);
+  const flat = parts.join(' - ');
+  const named = new File([file], flat, { type: file.type, lastModified: file.lastModified });
+  named._folder = parts.slice(0, -1).join('/');
+  return named;
 }
 
 function readAllEntries(dirReader) {
@@ -269,10 +344,48 @@ countOnlyEl.addEventListener('change', () => {
   deadlineField.style.display = isCountOnly ? 'none' : '';
   addressField.style.display = isCountOnly ? 'none' : '';
   submitBtn.textContent = isCountOnly ? 'Count my pages' : 'Submit for quote';
-  renderFileList();
+  plansBoxEl.style.display = isCountOnly ? 'none' : '';
+  updateSubmitState();
 });
 
+confirmFilesEl.addEventListener('change', updateSubmitState);
+
+// The submit button only works once there are files, they're within the
+// size limit, and the client has ticked to say they've checked the list.
+function updateSubmitState() {
+  const total = files.reduce((s, f) => s + f.size, 0);
+  const tooBig = total > MAX_TOTAL_BYTES;
+  confirmFilesWrap.style.display = files.length ? '' : 'none';
+  confirmFilesWrap.classList.toggle('ticked', confirmFilesEl.checked);
+  popupNoteEl.style.display = (files.length && confirmFilesEl.checked && countOnlyEl.checked) ? '' : 'none';
+  if (busy) { submitBtn.disabled = true; submitHintEl.style.display = 'none'; return; }
+  submitBtn.disabled = files.length === 0 || tooBig || !confirmFilesEl.checked;
+  const hint = files.length && !tooBig && !confirmFilesEl.checked
+    ? 'Tick the box above to confirm all your files are listed.' : '';
+  submitHintEl.textContent = hint;
+  submitHintEl.style.display = hint ? '' : 'none';
+}
+
+// Things that suggest a file isn't what the client meant to send - most often
+// a ZIP or download that hadn't finished when it was added, which shows up
+// here as a tiny file.
+const PARTIAL_DOWNLOAD = /\.(crdownload|part|partial|download|tmp)$/i;
+function fileWarning(f) {
+  if (PARTIAL_DOWNLOAD.test(f.name)) {
+    return "This looks like a download that hasn't finished yet. Let it finish, then remove this and add the finished file.";
+  }
+  if (f.size === 0) {
+    return "This file is empty (0 KB). It may not have finished saving or downloading - check it, then remove it and add it again.";
+  }
+  if (/\.zip$/i.test(f.name) && f.size < 1024 * 1024) {
+    return `This ZIP is only ${formatBytes(f.size)}. If you expected it to be bigger, it may still have been ` +
+           "creating or downloading when you added it - wait until it's finished, then remove it and add it again.";
+  }
+  return '';
+}
+
 function addFiles(fileListObj) {
+  if (busy) return;  // the upload in progress is already using the list
   for (const f of fileListObj) {
     // Ignore the exact same file being added twice.
     const dup = files.some(x => x.name === f.name && x.size === f.size && x.lastModified === f.lastModified);
@@ -283,27 +396,55 @@ function addFiles(fileListObj) {
 
 function renderFileList() {
   filelistEl.innerHTML = '';
+  // The list changed, so the client needs to check it again.
+  confirmFilesEl.checked = false;
   files.forEach((f, idx) => {
     const div = document.createElement('div');
     div.className = 'fileitem';
+    const info = document.createElement('span');
+    info.className = 'info';
     const label = document.createElement('span');
-    label.textContent = `${f.name} (${(f.size/1024/1024).toFixed(2)} MB)`;
+    label.textContent = `${f.name} (${formatBytes(f.size)})`;
+    info.appendChild(label);
+    const warning = fileWarning(f);
+    if (warning) {
+      div.classList.add('suspicious');
+      const warn = document.createElement('span');
+      warn.className = 'warn';
+      warn.textContent = '\u26A0 ' + warning;
+      info.appendChild(warn);
+    }
     const remove = document.createElement('span');
     remove.className = 'remove';
     remove.dataset.idx = idx;
     remove.innerHTML = '&#10005;';
-    div.appendChild(label);
+    remove.title = 'Remove this file';
+    div.appendChild(info);
     div.appendChild(remove);
     filelistEl.appendChild(div);
   });
   filelistEl.querySelectorAll('.remove').forEach(el => {
     el.addEventListener('click', () => {
+      if (busy) return;
       files.splice(parseInt(el.dataset.idx), 1);
       renderFileList();
     });
   });
   const total = files.reduce((s, f) => s + f.size, 0);
-  submitBtn.disabled = files.length === 0 || total > MAX_TOTAL_BYTES;
+  listHeadingEl.style.display = files.length ? '' : 'none';
+  if (files.length) {
+    filesAddedEl.innerHTML = '';
+    filesAddedEl.appendChild(document.createTextNode(
+      `\u2713 ${files.length} file${files.length === 1 ? '' : 's'} added (${formatBytes(total)}) - `));
+    const jump = document.createElement('a');
+    jump.href = '#listHeading';
+    jump.textContent = 'listed at the bottom of the page';
+    filesAddedEl.appendChild(jump);
+    filesAddedEl.style.display = '';
+  } else {
+    filesAddedEl.style.display = 'none';
+  }
+  updateSubmitState();
   statusEl.className = 'status';
   statusEl.textContent = total > MAX_TOTAL_BYTES
     ? `Total size ${(total/1024/1024/1024).toFixed(2)}GB exceeds the 5GB limit - please remove some files.`
@@ -326,15 +467,17 @@ function missingFields() {
   return required.filter(([, el]) => !el.value.trim()).map(([label]) => label);
 }
 
+// Returns true if the new tab opened. Browsers often block tabs opened after
+// a long wait, so the success message always has an "Open my report" button too.
+let reportUrl = null;
 function openReportInNewTab(html) {
-  const blob = new Blob([html], { type: 'text/html' });
-  const url = URL.createObjectURL(blob);
-  const win = window.open(url, '_blank');
-  if (!win) {
-    statusEl.className = 'status error';
-    statusEl.textContent = 'Your report is ready, but the pop-up was blocked. Please allow pop-ups for this site and try again.';
+  if (html) {
+    if (reportUrl) URL.revokeObjectURL(reportUrl);
+    reportUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
   }
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  if (!reportUrl) return false;
+  const win = window.open(reportUrl, '_blank');
+  return !!win;
 }
 
 function buildContactPayload() {
@@ -366,6 +509,7 @@ function setStage(text, percent) {
 function formatBytes(n) {
   if (n >= 1024 ** 3) return (n / 1024 ** 3).toFixed(2) + ' GB';
   if (n >= 1024 ** 2) return (n / 1024 ** 2).toFixed(1) + ' MB';
+  if (n === 0) return '0 KB';
   return Math.max(1, Math.round(n / 1024)) + ' KB';
 }
 
@@ -382,27 +526,64 @@ function showError(msg) {
   progressBar.style.display = 'none';
   statusEl.className = 'status error';
   statusEl.textContent = msg;
-  submitBtn.disabled = false;
+  updateSubmitState();
+}
+
+function addParagraph(parent, text) {
+  const p = document.createElement('div');
+  p.textContent = text;
+  parent.appendChild(p);
+  return p;
+}
+
+function addHistoryLine(parent, text) {
+  const p = document.createElement('div');
+  p.style.marginTop = '8px';
+  p.style.fontSize = '13px';
+  p.appendChild(document.createTextNode(text + ' '));
+  const a = document.createElement('a');
+  a.href = '/my-submissions';
+  a.textContent = 'My submissions';
+  p.appendChild(a);
+  parent.appendChild(p);
 }
 
 function showSuccess(parsed, isCountOnly) {
   busy = false;
   progressBar.style.display = 'none';
   const ref = parsed.reference_number;
+  statusEl.className = 'status success';
+  statusEl.textContent = '';
   if (isCountOnly) {
-    statusEl.className = 'status success';
-    statusEl.textContent = parsed.report_html
-      ? `Here's your page count${ref ? ` (reference ${ref})` : ''} - it's opened in a new tab. Nothing was sent or uploaded.`
-      : 'Page count complete, but the report could not be displayed. Please try again.';
-    if (parsed.report_html) openReportInNewTab(parsed.report_html);
+    if (parsed.report_html) {
+      const opened = openReportInNewTab(parsed.report_html);
+      addParagraph(statusEl, opened
+        ? `Here's your page count${ref ? ` (reference ${ref})` : ''} - it's opened in a new tab.`
+        : `Your page count${ref ? ` (reference ${ref})` : ''} is ready. Your browser blocked the new tab, so use the button below to open it.`);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'open-report';
+      btn.textContent = 'Open my report';
+      btn.addEventListener('click', () => {
+        if (!openReportInNewTab()) {
+          // Still blocked - show it in this tab instead.
+          window.location.href = reportUrl;
+        }
+      });
+      statusEl.appendChild(btn);
+      if (parsed.history) addHistoryLine(statusEl, "Nothing was sent to us for a quote. This count is also saved in");
+    } else {
+      addParagraph(statusEl, 'Page count complete, but the report could not be displayed. Please try again.');
+    }
   } else {
-    statusEl.className = 'status success';
-    statusEl.textContent = `Thanks! Your files have been received${ref ? ` - your reference number is ${ref}` : ''} and we'll be in touch with a quote shortly.`;
+    addParagraph(statusEl, `Thanks! Your files have been received${ref ? ` - your reference number is ${ref}` : ''} and we'll be in touch with a quote shortly.`);
+    if (parsed.history) addHistoryLine(statusEl, "We've emailed you a confirmation. You can see everything you've sent us in");
   }
   filelistEl.innerHTML = '';
   files = [];
+  confirmFilesEl.checked = false;
   document.getElementById('clientNote').value = '';
-  submitBtn.disabled = false;
+  updateSubmitState();
 }
 
 // Small JSON request - used for /upload/init and /upload/finalize, both of
@@ -487,6 +668,8 @@ function submitLegacy(isCountOnly) {
   const contact = buildContactPayload();
   Object.entries(contact).forEach(([k, v]) => formData.append(k, v));
   formData.append('count_only', isCountOnly ? '1' : '0');
+  formData.append('folders', JSON.stringify(files.map(f => f._folder || '')));
+  formData.append('plans_to_scale', !isCountOnly && plansToScaleEl.checked ? '1' : '0');
 
   const xhr = new XMLHttpRequest();
   xhr.open('POST', '/upload', true);
@@ -543,7 +726,7 @@ async function waitForCount(initResp) {
       if (err.message !== 'network' || ++networkMisses > 15) throw err;
       continue;  // brief connection blip - keep checking
     }
-    if (job.state === 'done') return { report_html: job.report_html, reference_number };
+    if (job.state === 'done') return { report_html: job.report_html, reference_number, history: initResp.history };
     if (job.state === 'error') throw new Error(job.error || 'Something went wrong counting your pages.');
     setStage(job.stage || 'Counting your pages...', null);
   }
@@ -600,10 +783,12 @@ async function submitViaRelay(initResp, isCountOnly) {
     count_only: isCountOnly,
     client_note: document.getElementById('clientNote').value,
     contact: buildContactPayload(),
+    folders: files.map(f => f._folder || ''),
+    plans_to_scale: !isCountOnly && plansToScaleEl.checked,
   }, 90 * 1000);
 
   if (isCountOnly) {
-    showSuccess(await waitForCount(initResp), true);
+    showSuccess(await waitForCount({ ...initResp, history: finalizeResp.history }), true);
   } else {
     showSuccess(finalizeResp, false);
   }
@@ -621,10 +806,15 @@ submitBtn.addEventListener('click', async () => {
     statusEl.textContent = 'Please add at least one file.';
     return;
   }
+  if (!confirmFilesEl.checked) {
+    statusEl.className = 'status error';
+    statusEl.textContent = "Please tick the box to confirm you've checked your file list.";
+    return;
+  }
 
   const isCountOnly = countOnlyEl.checked;
-  submitBtn.disabled = true;
   busy = true;
+  updateSubmitState();
   setStage('Preparing your upload...', null);
 
   try {

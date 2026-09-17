@@ -84,8 +84,11 @@ def analyze_pdf(path, source_file, location=""):
                 return rows
         for i, page in enumerate(reader.pages, start=1):
             box = page.mediabox
-            w_mm = mm_from_points(float(box.width))
-            h_mm = mm_from_points(float(box.height))
+            # Some PDFs define the page corners "upside down", which makes the
+            # height (or width) come out negative, e.g. 594 x -841. The size
+            # is the same either way, so drop the minus sign.
+            w_mm = abs(mm_from_points(float(box.width)))
+            h_mm = abs(mm_from_points(float(box.height)))
             m = match_page_size(w_mm, h_mm)
             rows.append(Row(
                 source_file, location, "PDF", f"Page {i}",
@@ -221,7 +224,13 @@ def _col_index_to_letters(n):
 def _scan_sheet(zf, part):
     """Streams through one worksheet's XML, keeping only what the size
     estimate needs: print setup, column widths, custom row heights and the
-    extent of the cells. Memory stays flat however big the sheet is."""
+    extent of the cells that have something in them. Memory stays flat
+    however big the sheet is.
+
+    Only cells with a value or formula count towards the extent. Sheets often
+    have formatting (borders, colours) applied to whole rows, which Excel
+    stores as empty cells running out to the very last column (XFD) - counting
+    those made one-page sheets come out 22 metres wide."""
     import re
     import xml.etree.ElementTree as ET
     info = {"paper": None, "orientation": None, "cols": [], "heights": {},
@@ -230,6 +239,7 @@ def _scan_sheet(zf, part):
     row_num = 0
     col_num = 0
     in_cell = None  # (row, col) of the cell being read
+    cell_counted = False
     with zf.open(part) as fh:
         for event, el in ET.iterparse(fh, events=("start", "end")):
             name = _local(el.tag)
@@ -252,12 +262,17 @@ def _scan_sheet(zf, part):
                         col_num += 1
                         row_here = row_num
                     in_cell = (row_here, col_num)
-                    for key, val, fn in (("min_row", row_here, min), ("max_row", row_here, max),
-                                         ("min_col", col_num, min), ("max_col", col_num, max)):
-                        info[key] = val if info[key] is None else fn(info[key], val)
+                    cell_counted = False
             else:
-                if name in ("v", "is") and in_cell == (1, 1) and (name == "is" or (el.text or "") != ""):
-                    info["a1_has_value"] = True
+                if name in ("v", "is", "f") and in_cell is not None and not cell_counted and (
+                        name == "is" or (el.text or "") != ""):
+                    cell_counted = True
+                    row_here, col_here = in_cell
+                    for key, val, fn in (("min_row", row_here, min), ("max_row", row_here, max),
+                                         ("min_col", col_here, min), ("max_col", col_here, max)):
+                        info[key] = val if info[key] is None else fn(info[key], val)
+                    if in_cell == (1, 1):
+                        info["a1_has_value"] = True
                 elif name == "c":
                     in_cell = None
                 elif name == "col":
@@ -269,6 +284,11 @@ def _scan_sheet(zf, part):
                 if name == "row" and sheet_data is not None:
                     sheet_data.clear()  # drop finished rows so memory doesn't grow
     return info
+
+
+# A spreadsheet estimated bigger than this on either side (a bit over A0's
+# long side x 2) is almost certainly a quirk of the file, not a real print size.
+MAX_PLAUSIBLE_SHEET_MM = 2500
 
 
 def analyze_xlsx(path, source_file, location=""):
@@ -333,6 +353,14 @@ def analyze_xlsx(path, source_file, location=""):
                 total_h_mm = 0.0
                 for r in range(ws["min_row"], ws["max_row"] + 1):
                     total_h_mm += _excel_row_height_to_mm(ws["heights"].get(r))
+
+                if max(total_w_mm, total_h_mm) > MAX_PLAUSIBLE_SHEET_MM:
+                    rows.append(Row(
+                        source_file, location, "Excel", f"Sheet '{title}' (used range {dim})",
+                        flagged=True,
+                        notes=(f"No print size set, and the estimate came out implausibly large "
+                               f"({total_w_mm:,.0f} x {total_h_mm:,.0f} mm) - check manually.")))
+                    continue
 
                 m = match_page_size(total_w_mm, total_h_mm)
                 rows.append(Row(

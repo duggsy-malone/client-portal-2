@@ -279,10 +279,38 @@ Because of the Cloudflare limit above, big uploads can't come straight to this a
 - **If something goes wrong** (TransferNow down, a download failing, the server restarting mid-job): the files are kept in R2 and flagged, and you get an email. Open **`https://client-portal-2.onrender.com/admin/attention`** (it asks for your admin password) to download the files, **Try processing again**, or **Delete from storage** once you're done.
 - **Interrupted jobs** (e.g. by a redeploy) are restarted automatically within about 3 hours; after 3 failed attempts they're flagged for attention instead.
 - **Abandoned uploads** (client closed the tab part-way) are deleted after 24 hours. Flagged jobs are never deleted automatically.
+- **Progress:** while a quote job runs, the log and the attention page show what it's doing, e.g. "Counting pages (120 of 433)" or "Sending to TransferNow (200 of 433)", updated about every 30 seconds (the attention page refreshes itself every minute). Files go to TransferNow 4 at a time (`TRANSFERNOW_PARALLEL_FILES` changes that).
 
 ### What the client sees while uploading
 
+Before they can submit, the client has to tick "I've checked my file list and I can see all of my files present" (it unticks itself if the list changes). A file that looks wrong gets a yellow warning in the list: a ZIP under 1 MB (usually one that was still being created or downloaded), an empty file, or an unfinished download (`.crdownload`, `.part`...). For "just count my pages", ticking the box also shows a note to allow pop-ups, and the finished page always has an **Open my report** button in case the new tab was blocked.
+
 "Preparing your upload..." then "Uploading - 2 of 5 files done - 120 MB of 480 MB (25%)" with a filling bar, then "Upload complete - finishing up...". Up to 3 files upload at once; a file that fails part-way is retried automatically a few times before giving up. If they try to close the tab mid-upload, the browser asks them to confirm.
+
+## What's in the report
+
+- **Plans banner** (quote requests): "PLANS: PRINTED TO SCALE" or "PLANS: A3 FOLDED", from the tick box on the upload page. It's also on the end of the email subject ("- TO SCALE" / "- A3 FOLDED").
+- **Totals, together:** pages/items, estimated sheets of paper, **tabs** (one per folder, at every level, including the outer folder the client dragged in, and a ZIP counts as a folder), **dividers** (one per document: every file, and every file inside a ZIP), and files.
+- **Spreadsheets - check these:** every Excel file with its folder, worksheets, estimated pages, sizes, and whether the print size is set in the file or estimated.
+- **Quantity by size**, with non-standard sizes broken down.
+- **Folders:** a diagram of the folder structure with documents and pages in each folder (including subfolders). In the page-count report each folder has a "show files" toggle; the email shows folders only.
+- **Full breakdown** of every page.
+- In the **page-count report** (opens in the browser) each section can be folded away; the full breakdown starts folded. Emails can't fold, so the quote email shows everything.
+- The CSV has the same totals, spreadsheet and folder sections.
+- Folder details come from the upload page, which sends each file's real folder path. Reports from before this change can't be recounted for tabs.
+- **Spreadsheet sizes:** only cells with something in them count towards a sheet's estimated size (formatting on empty cells is ignored). A sheet that still comes out bigger than 2.5 m on a side is listed as "check manually" instead of given a size.
+
+## Submission history ("My submissions") and the admin list
+
+Needs Cloudflare R2 (above) and email (Brevo) to be set up - nothing else to configure.
+
+- **Clients don't need an account.** After a quote request they get a short confirmation email with their reference number and a **View my submissions** button. That opens a private page listing everything sent from that email address: reference, date, quote or page count, files, pages, quantity by size, and their copy of the report. The link lasts 30 days. Any time after that, the **My submissions** link at the top of the upload page lets them enter their email and get a fresh link by email. (A link is only ever emailed, never shown on screen, so nobody can look up someone else's submissions by typing their address.)
+- **Only submissions from when this went live** are listed - earlier ones weren't recorded.
+- **Each email address has its own history**, so a typo in the address files that submission under the typo. Capital letters don't matter.
+- **The files themselves aren't kept** - just a few KB of details per submission, plus a copy of the report (tens of KB). A thousand submissions is roughly 50-200 MB, well inside R2's free 10 GB.
+- **Your list of everything:** `https://client-portal-2.onrender.com/admin/submissions` (same admin password). Newest first, with search (reference, email, company, name, subject, phone), a quotes/page-counts filter, status, the report and the TransferNow link. It links to and from the attention page.
+- **Optional email settings** (Render -> Environment): `EMAIL_FROM_NAME` is the sender name clients see (e.g. `iPrintManage`; default "Client Portal"), and `EMAIL_REPLY_TO` is where their replies go (e.g. `sales@iprintmanage.com`).
+- **Good to know:** the private links are signed with `APP_SECRET` if you set one, otherwise with the R2 secret key. If you ever change whichever one is in use, links already emailed stop working (clients just request a new one). Setting `APP_SECRET` to a long random value avoids that.
 
 ## Desktop Page Counter (for your own use)
 
@@ -293,6 +321,8 @@ Because of the Cloudflare limit above, big uploads can't come straight to this a
 ```
 app.py          - Flask web server: both upload routes, storage, cleanup, kicks off analysis+email
 r2_storage.py   - Cloudflare R2 storage for large uploads (see "Large files: Cloudflare R2")
+history.py      - submission records for "My submissions" and the admin list
+structure.py    - documents (dividers), folders (tabs), the folder diagram and spreadsheet list
 analyzer.py     - the core file-analysis logic (PDF/JPG/PPTX/XLSX/ZIP)
 paper_sizes.py  - reference tables of standard page/slide sizes + matching logic
 report.py       - builds the HTML email body and CSV attachment from analysis results
@@ -303,7 +333,8 @@ file_transfer.py     - picks WeTransfer or TransferNow for uploading originals, 
 wetransfer_upload.py - WeTransfer provider (for your paid account, once reachable)
 transfernow_upload.py - TransferNow provider (works now, free 14-day trial then pay-as-you-go)
 templates/index.html - the client-facing drag & drop page
-templates/admin_*.html - admin pages: login, uploads needing attention, file downloads
+templates/my_submissions.html - the client's private submission history page
+templates/admin_*.html - admin pages: login, all submissions, uploads needing attention, file downloads
 desktop_app.py, templates/desktop.html, desktop/ - the desktop Page Counter
 make_samples.py - generates the test files used to validate the analyzer (samples/)
 samples/        - sample test files (mixed standard + unusual sizes)

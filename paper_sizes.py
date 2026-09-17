@@ -88,7 +88,9 @@ class SizeMatch:
 
 
 def _normalise(width_mm: float, height_mm: float):
-    """Return (short_side, long_side) so orientation doesn't affect matching."""
+    """Return (short_side, long_side) so orientation doesn't affect matching.
+    Negative measurements (from PDFs with flipped page corners) count as positive."""
+    width_mm, height_mm = abs(width_mm), abs(height_mm)
     return (min(width_mm, height_mm), max(width_mm, height_mm))
 
 

@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex">
+<title>My submissions</title>
+<style>
+  :root { --brand: #2c3e50; --accent: #2980b9; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; background: #f4f6f8; margin: 0; color: #222; }
+  .wrap { max-width: 720px; margin: 40px auto; padding: 0 16px; }
+  h1 { color: var(--brand); font-size: 1.6rem; margin-bottom: 4px; }
+  p.lede { color: #555; margin-top: 0; }
+  .box { background: #fff; border: 1px solid #e0e0e0; border-radius: 12px; padding: 20px; margin-top: 20px; }
+  label { font-size: 13px; color: #455a64; display: block; }
+  input[type=email] { width: 100%; margin-top: 6px; border-radius: 8px; border: 1px solid #ccc; padding: 10px; font-size: 15px; font-family: inherit; }
+  button { margin-top: 14px; width: 100%; padding: 13px; border: none; border-radius: 8px; background: var(--accent); color: #fff; font-size: 16px; cursor: pointer; }
+  .msg { border-radius: 8px; padding: 14px 16px; margin-top: 20px; font-size: 14px; }
+  .msg.ok { background: #e8f8ef; border: 1px solid #b7e4c7; color: #1e6b3c; }
+  .msg.warn { background: #fff8e6; border: 1px solid #f3d27a; color: #7a5a00; }
+  .sub { background: #fff; border: 1px solid #e0e0e0; border-radius: 12px; padding: 16px 18px; margin-top: 12px; }
+  .sub .top { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; align-items: baseline; }
+  .sub .ref { font-weight: bold; }
+  .sub .meta { color: #555; font-size: 13px; margin-top: 4px; }
+  .pill { font-size: 12px; padding: 2px 9px; border-radius: 10px; background: #eaf3fa; color: #1c5a80; white-space: nowrap; }
+  table { border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+  td { padding: 2px 14px 2px 0; }
+  td.qty { text-align: right; font-weight: 600; }
+  td.subrow { padding-left: 16px; color: #666; }
+  a.report { display: inline-block; margin-top: 10px; font-size: 14px; color: var(--accent); }
+  .foot { font-size: 12px; color: #90a4ae; margin-top: 24px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>My submissions</h1>
+
+  {% if mode == 'unavailable' %}
+    <div class="msg warn">Submission history isn't available at the moment.</div>
+
+  {% elif mode == 'error' %}
+    <div class="msg warn">We couldn't load your submissions just now. Please try the link again in a minute.</div>
+
+  {% elif mode == 'sent' %}
+    <div class="msg ok">
+      <b>Check your inbox.</b> If we have any submissions for that email address, we've sent it a private link to see them.
+      It can take a minute or two to arrive &ndash; check your spam folder if it doesn't show up.
+    </div>
+    <p class="foot"><a href="{{ url_for('index') }}">&larr; Back to the upload page</a></p>
+
+  {% elif mode == 'ask' %}
+    <p class="lede">See everything you've sent us. No account needed &ndash; we'll email you a private link.</p>
+    {% if link_problem == 'expired' %}
+      <div class="msg warn">That link has expired. Enter your email below and we'll send you a new one.</div>
+    {% elif link_problem %}
+      <div class="msg warn">That link isn't valid (it may have been cut short when copied). Enter your email below for a new one.</div>
+    {% endif %}
+    <form class="box" method="post" action="{{ url_for('my_submissions_request_link') }}">
+      <label>The email address you used when sending your files
+        <input type="email" name="email" required autocomplete="email">
+      </label>
+      <button type="submit">Email me my link</button>
+    </form>
+    <p class="foot"><a href="{{ url_for('index') }}">&larr; Back to the upload page</a></p>
+
+  {% elif mode == 'list' %}
+    <p class="lede">Everything sent from your email address, newest first.</p>
+    {% if not submissions %}
+      <div class="box">Nothing here yet.</div>
+    {% endif %}
+    {% for s in submissions %}
+    <div class="sub">
+      <div class="top">
+        <span class="ref">Ref {{ s.reference_number }}</span>
+        <span class="pill">{{ s.status }}</span>
+      </div>
+      <div class="meta">{{ s.kind }} &middot; {{ s.date }}{% if s.subject %} &middot; {{ s.subject }}{% endif %}</div>
+      {% if s.file_count is not none %}
+      <div class="meta">{{ s.file_count }} file{{ '' if s.file_count == 1 else 's' }}{% if s.total_items is not none %}, {{ "{:,}".format(s.total_items) }} page{{ '' if s.total_items == 1 else 's' }} / items{% endif %}{% if s.sheets is not none %}, about {{ "{:,}".format(s.sheets) }} sheets of paper{% endif %}</div>
+      {% if s.tabs is not none %}<div class="meta">{{ s.tabs }} tab{{ '' if s.tabs == 1 else 's' }} &middot; {{ s.dividers }} divider{{ '' if s.dividers == 1 else 's' }}</div>{% endif %}
+      {% endif %}
+      {% if s.plans %}<div class="meta"><b>{{ s.plans }}</b></div>{% endif %}
+      {% if s.sizes %}
+      <table>
+        {% for size in s.sizes %}
+          <tr><td>{{ size.label.split(' (')[0] }}{% if size.breakdown %} (total){% endif %}</td><td class="qty">{{ size.qty }}</td></tr>
+          {% for b in size.breakdown %}
+          <tr><td class="subrow">{{ b[0] }}</td><td class="qty">{{ b[1] }}</td></tr>
+          {% endfor %}
+        {% endfor %}
+      </table>
+      {% endif %}
+      {% if s.report_url %}<a class="report" href="{{ s.report_url }}" target="_blank" rel="noopener">View report</a>{% endif %}
+    </div>
+    {% endfor %}
+    <p class="foot">This private link works until {{ expires }}. Please don't share it &ndash; anyone with it can see this page.
+      <br><a href="{{ url_for('index') }}">Send us more files</a></p>
+  {% endif %}
+</div>
+</body>
+</html>

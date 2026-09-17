@@ -35,16 +35,19 @@ import threading
 import html as html_lib
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from urllib.parse import urlencode
 
-from flask import Flask, request, jsonify, render_template, redirect, url_for
+from flask import Flask, request, jsonify, render_template, redirect, url_for, Response
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from analyzer import analyze_file
-from report import rows_to_csv, rows_to_html
-from emailer import send_report_email
-from file_transfer import upload_submission
+from report import rows_to_csv, rows_to_html, build_size_summary, job_totals
+from emailer import send_report_email, send_client_email
+from file_transfer import upload_submission, WETRANSFER_API_KEY
 from reference_number import next_reference_number
 import r2_storage
+import history
+import structure
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("portal")
@@ -64,6 +67,8 @@ STALLED_AFTER_MINUTES = 120     # a job with no progress this long gets restarte
 MAX_JOB_ATTEMPTS = 3
 HEARTBEAT_SECONDS = 600
 SWEEP_EVERY_SECONDS = 3600
+PROGRESS_SAVE_SECONDS = 30      # how often progress is written to the log/attention page
+SUBMISSION_ID_RE = r"\d{8}-\d{6}-[0-9a-f]{6}"
 
 # Password for the /admin pages. GDRIVE_ADMIN_KEY still works so the value
 # already saved in Render doesn't need renaming.
@@ -175,6 +180,56 @@ def _contact_from(source):
     return {field: (str(source.get(field) or "")).strip() for field in FIELD_LABELS}
 
 
+def _folder_list(value):
+    """The browser sends, for each file in upload order, the folder it came
+    from ("Archway/Drawings", or "" for a loose file)."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            value = []
+    if not isinstance(value, list):
+        return []
+    return [(v if isinstance(v, str) else "")[:2000] for v in value[:20000]]
+
+
+def _folder_info(saved_paths, folders, indices=None):
+    """{analysed file name: {"folders": [...], "name": original name}} for the
+    report's tabs, dividers and folder diagram. `indices` gives each saved
+    file's position in the upload (when it isn't simply the list order)."""
+    info = {}
+    for n, path in enumerate(saved_paths):
+        i = indices[n] if indices is not None else n
+        parts = structure.clean_folder_path(folders[i]) if 0 <= i < len(folders) else []
+        base = os.path.basename(path)
+        info[base] = {"folders": parts, "name": structure.original_name(base, parts)}
+    return info
+
+
+def _plans_flag(value):
+    return str(value).strip().lower() in ("1", "true", "on", "yes")
+
+
+def _no_store(resp):
+    """Private pages (links with a token in them): don't cache them, don't
+    leak the address to other sites, keep them out of search engines."""
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["X-Robots-Tag"] = "noindex"
+    return resp
+
+
+def _transfer_title(reference_number, contact):
+    """e.g. "Quote request 170926-00003 - Acme Ltd - Archway campus" - the
+    name the transfer gets in TransferNow/WeTransfer, so each is recognisable."""
+    parts = [f"Quote request {reference_number}", contact.get("company", ""), contact.get("subject", "")]
+    return " - ".join(p.strip() for p in parts if p and p.strip())[:200]
+
+
+def _transfer_service_name():
+    return "WeTransfer" if WETRANSFER_API_KEY else "TransferNow"
+
+
 # ==========================================================================
 # Pages
 # ==========================================================================
@@ -204,6 +259,8 @@ def upload():
     client_note = request.form.get("client_note", "").strip()
     count_only = request.form.get("count_only", "").strip().lower() in ("1", "true", "on", "yes")
     contact = _contact_from(request.form)
+    folders = _folder_list(request.form.get("folders"))
+    plans_to_scale = None if count_only else _plans_flag(request.form.get("plans_to_scale"))
 
     error = _validate_contact(contact, count_only) or _validate_file_names([f.filename for f in uploaded_files])
     if error:
@@ -224,7 +281,8 @@ def upload():
 
     if count_only:
         try:
-            html_body = _count_report(saved_paths, submission_id, client_note, contact, reference_number)
+            html_body, _rows = _count_report(saved_paths, submission_id, client_note, contact, reference_number,
+                                             folder_info=_folder_info(saved_paths, folders))
         except Exception as e:
             logger.exception(f"Count-only submission {submission_id} failed: {e}")
             return jsonify({"error": "Something went wrong analysing your files. Please try again."}), 500
@@ -235,6 +293,7 @@ def upload():
 
     threading.Thread(target=process_submission,
                      args=(submission_id, saved_paths, client_note, contact, reference_number),
+                     kwargs={"folder_info": _folder_info(saved_paths, folders), "plans_to_scale": plans_to_scale},
                      daemon=True).start()
     return jsonify({"status": "received", "submission_id": submission_id,
                     "reference_number": reference_number, "files": len(saved_paths)})
@@ -297,16 +356,19 @@ def upload_finalize():
     count_only = bool(data.get("count_only"))
     client_note = (data.get("client_note") or "").strip()
     contact = _contact_from(data.get("contact") or {})
+    folders = _folder_list(data.get("folders"))
+    plans_to_scale = None if count_only else _plans_flag(data.get("plans_to_scale"))
     error = _validate_contact(contact, count_only)
     if error:
         return jsonify({"error": error}), 400
 
+    portal_url = request.host_url.rstrip("/")
     if count_only:
         _write_job(submission_id, state="processing", stage="Fetching your files...")
         threading.Thread(target=_run_count_job,
-                         args=(submission_id, reference_number, contact, client_note), daemon=True).start()
+                         args=(submission_id, reference_number, contact, client_note, folders), daemon=True).start()
         return jsonify({"status": "processing", "submission_id": submission_id,
-                        "reference_number": reference_number})
+                        "reference_number": reference_number, "history": history.is_enabled()})
 
     status = {
         "submission_id": submission_id,
@@ -314,11 +376,14 @@ def upload_finalize():
         "status": "received",
         "contact": contact,
         "client_note": client_note,
-        "portal_url": request.host_url.rstrip("/"),
+        "portal_url": portal_url,
         "created_at": _now_iso(),
         "updated_at": _now_iso(),
         "attempts": 0,
         "error": "",
+        "stage": "",
+        "plans_to_scale": plans_to_scale,
+        "folders": folders,
     }
     try:
         # Recording this first means the files are never mistaken for an
@@ -330,7 +395,10 @@ def upload_finalize():
 
     logger.info(f"Submission {submission_id} (ref {reference_number}): upload complete, processing in background.")
     threading.Thread(target=_run_quote_job, args=(submission_id,), daemon=True).start()
-    return jsonify({"status": "received", "submission_id": submission_id, "reference_number": reference_number})
+    threading.Thread(target=_send_confirmation_email, args=(contact, reference_number, portal_url, plans_to_scale),
+                     daemon=True).start()
+    return jsonify({"status": "received", "submission_id": submission_id, "reference_number": reference_number,
+                    "history": history.is_enabled()})
 
 
 @app.route("/upload/status")
@@ -363,6 +431,42 @@ def _save_status(status):
     status["updated_at"] = _now_iso()
     r2_storage.put_bytes(_status_key(status["submission_id"]),
                          json.dumps(status).encode(), "application/json")
+    history.save(_record_from_status(status))
+
+
+HISTORY_FIELDS = ("submission_id", "reference_number", "contact", "client_note", "created_at", "updated_at",
+                  "status", "stage", "error", "file_count", "total_items", "flagged", "sizes",
+                  "transfer_link", "has_report", "plans_to_scale", "sheets", "tabs", "dividers")
+
+
+def _record_from_status(status):
+    record = {k: status[k] for k in HISTORY_FIELDS if k in status}
+    record["kind"] = "quote"
+    return record
+
+
+def _progress_updater(status):
+    """Returns update(text, force=False): records what a quote job is doing
+    right now (e.g. "Counting pages (120 of 433)") in the log and on the
+    attention page. Written at most every PROGRESS_SAVE_SECONDS unless
+    `force`, so hundreds of files don't mean hundreds of storage writes."""
+    lock = threading.Lock()
+    last = [0.0]
+    label = f"Submission {status['submission_id']} (ref {status['reference_number']})"
+
+    def update(text, force=False):
+        with lock:
+            status["stage"] = text
+            now = time.time()
+            if not force and now - last[0] < PROGRESS_SAVE_SECONDS:
+                return
+            last[0] = now
+            logger.info(f"{label}: {text}")
+            try:
+                _save_status(status)
+            except Exception as e:
+                logger.warning(f"{label}: couldn't save progress - {e}")
+    return update
 
 
 def _load_status(submission_id):
@@ -393,9 +497,10 @@ def _read_job(submission_id):
         return None
 
 
-def _download_submission(submission_id, dest_dir, on_progress=None):
+def _download_submission(submission_id, dest_dir, on_progress=None, indices_out=None):
     """Pulls every uploaded file down from R2 (a few at a time). Returns local
-    paths in upload order, using the client's original file names."""
+    paths in upload order, using the client's original file names. If given a
+    list as `indices_out`, fills it with each file's position in the upload."""
     objects = sorted(r2_storage.list_objects(_files_prefix(submission_id)), key=lambda o: o["key"])
     if not objects:
         raise r2_storage.StorageError("no uploaded files were found in storage")
@@ -406,6 +511,9 @@ def _download_submission(submission_id, dest_dir, on_progress=None):
         dest = _unique_dest(dest_dir, original)
         open(dest, "wb").close()  # reserve the name before downloading in parallel
         dests.append(dest)
+        if indices_out is not None:
+            m = re.match(r"^(\d{5})-", obj["key"].rsplit("/", 1)[-1])
+            indices_out.append(int(m.group(1)) if m else -1)
 
     done = [0]
     lock = threading.Lock()
@@ -422,30 +530,55 @@ def _download_submission(submission_id, dest_dir, on_progress=None):
     return dests
 
 
-def _count_report(saved_paths, submission_id, client_note, contact, reference_number):
+def _count_report(saved_paths, submission_id, client_note, contact, reference_number, on_file=None,
+                  folder_info=None):
+    """Returns (report html, rows)."""
     all_rows = []
-    for path in saved_paths:
+    for i, path in enumerate(saved_paths, start=1):
+        if on_file:
+            on_file(i, len(saved_paths))
         all_rows.extend(analyze_file(path, os.path.basename(path)))
-    return rows_to_html(all_rows, submission_id, client_note, contact=contact,
-                        count_only=True, reference_number=reference_number)
+    html_body = rows_to_html(all_rows, submission_id, client_note, contact=contact,
+                             count_only=True, reference_number=reference_number, folder_info=folder_info)
+    return html_body, all_rows
 
 
-def _run_count_job(submission_id, reference_number, contact, client_note):
+def _run_count_job(submission_id, reference_number, contact, client_note, folders=None):
     local_dir = os.path.join(UPLOAD_DIR, submission_id)
+    record = {"submission_id": submission_id, "reference_number": reference_number, "kind": "count",
+              "contact": contact, "client_note": client_note, "created_at": _now_iso(),
+              "updated_at": _now_iso(), "status": "processing"}
+    history.save(record)
     try:
+        indices = []
         saved = _download_submission(
             submission_id, local_dir,
-            on_progress=lambda n, total: _write_job(submission_id, stage=f"Fetching your files ({n} of {total})..."))
-        _write_job(submission_id, stage="Counting pages...")
-        html_body = _count_report(saved, submission_id, client_note, contact, reference_number)
+            on_progress=lambda n, total: _write_job(submission_id, stage=f"Fetching your files ({n} of {total})..."),
+            indices_out=indices)
+        folder_info = _folder_info(saved, folders or [], indices)
+
+        def on_file(n, total):
+            if n == 1 or n == total or n % 10 == 0:
+                _write_job(submission_id, stage=f"Counting pages (file {n} of {total})...")
+        html_body, rows = _count_report(saved, submission_id, client_note, contact, reference_number, on_file,
+                                        folder_info=folder_info)
         with open(os.path.join(JOBS_DIR, f"{submission_id}.html"), "w") as f:
             f.write(html_body)
         _write_job(submission_id, state="done", stage="Done")
         logger.info(f"Count-only {submission_id} (ref {reference_number}): report ready.")
+        totals = job_totals(rows, folder_info)
+        record.update(sheets=totals["sheets"], tabs=totals["tabs"], dividers=totals["dividers"])
+        record.update(status="done", file_count=len(saved), total_items=len(rows),
+                      flagged=sum(1 for r in rows if r.flagged),
+                      sizes=history.sizes_for_record(build_size_summary(rows)),
+                      has_report=history.save_report(submission_id, html_body), updated_at=_now_iso())
+        history.save(record)
     except Exception as e:
         logger.exception(f"Count-only {submission_id}: failed - {e}")
         _write_job(submission_id, state="error",
                    error="Something went wrong counting your pages. Please try again.")
+        record.update(status="failed", updated_at=_now_iso())
+        history.save(record)
     finally:
         shutil.rmtree(local_dir, ignore_errors=True)
         try:
@@ -476,7 +609,16 @@ def _run_quote_job(submission_id):
         ref = status["reference_number"]
         status["status"] = "processing"
         status["attempts"] = int(status.get("attempts") or 0) + 1
+        # Every field is created up front: the heartbeat thread saves this same
+        # dict, and adding keys while it's being saved would break that save.
+        for field, empty in (("stage", ""), ("file_count", None), ("total_items", None), ("flagged", None),
+                             ("sizes", []), ("transfer_link", ""), ("has_report", False),
+                             ("plans_to_scale", None), ("folders", []), ("sheets", None), ("tabs", None),
+                             ("dividers", None)):
+            status.setdefault(field, empty)
+        status["stage"] = "Starting"
         _save_status(status)
+        progress = _progress_updater(status)
 
         def heartbeat():
             # Keeps updated_at fresh so the hourly check doesn't think a long
@@ -489,21 +631,53 @@ def _run_quote_job(submission_id):
         threading.Thread(target=heartbeat, daemon=True).start()
 
         try:
-            saved_paths = _download_submission(submission_id, local_dir)
+            indices = []
+            saved_paths = _download_submission(
+                submission_id, local_dir,
+                on_progress=lambda n, total: progress(f"Fetching files from storage ({n} of {total})",
+                                                      force=(n == 1)),
+                indices_out=indices)
+            folder_info = _folder_info(saved_paths, status.get("folders") or [], indices)
         except Exception as e:
             logger.error(f"Submission {submission_id} (ref {ref}): couldn't fetch files from storage - {e}")
             _mark_needs_attention(status, f"Couldn't fetch the uploaded files from storage: {e}")
             return
 
+        def on_analysed(rows):
+            client_copy = rows_to_html(
+                rows, submission_id, status.get("client_note", ""), contact=status.get("contact", {}),
+                reference_number=ref, title=f"Your quote request - ref {ref}",
+                banner="Your copy of what we received for this quote request.",
+                folder_info=folder_info, plans_to_scale=status.get("plans_to_scale"))
+            totals = job_totals(rows, folder_info)
+            status["sheets"] = totals["sheets"]
+            status["tabs"] = totals["tabs"]
+            status["dividers"] = totals["dividers"]
+            status["file_count"] = len(saved_paths)
+            status["total_items"] = len(rows)
+            status["flagged"] = sum(1 for r in rows if r.flagged)
+            status["sizes"] = history.sizes_for_record(build_size_summary(rows))
+            status["has_report"] = history.save_report(submission_id, client_copy)
+
+        outcome = {}
         delivered = process_submission(
             submission_id, saved_paths, status.get("client_note", ""), status.get("contact", {}), ref,
             on_link_failed=lambda: _mark_needs_attention(status, "Couldn't create the download link for the "
-                                                                 "original files.", send_alert=False))
+                                                                 "original files.", send_alert=False),
+            on_stage=progress, on_analysed=on_analysed, outcome=outcome,
+            folder_info=folder_info, plans_to_scale=status.get("plans_to_scale"))
         if not delivered and status.get("status") != "needs_attention":
             # Crashed somewhere other than the download-link step, so no report
             # email went out - flag it and tell Kaye.
             _mark_needs_attention(status, "Processing failed unexpectedly - the portal's logs have details.")
         if delivered:
+            status["status"] = "sent"
+            status["stage"] = ""
+            status["transfer_link"] = outcome.get("link", "")
+            try:
+                _save_status(status)  # also updates the history record
+            except Exception as e:
+                logger.warning(f"Submission {submission_id}: couldn't record completion - {e}")
             try:
                 removed = r2_storage.delete_prefix(f"incoming/{submission_id}/")
                 logger.info(f"Submission {submission_id} (ref {ref}): done, removed {removed} file(s) from storage.")
@@ -562,20 +736,36 @@ def _send_alert(reference_number, subject, html_body):
 
 
 def process_submission(submission_id, saved_paths, client_note, contact, reference_number,
-                       on_link_failed=None):
+                       on_link_failed=None, on_stage=None, on_analysed=None, outcome=None,
+                       folder_info=None, plans_to_scale=None):
     """Analyse, get a download link for the originals, email the report.
     Returns True only if the originals definitely reached Kaye via a link.
     `on_link_failed`, if given, is called when they didn't, and may return a
-    sentence to add to the report saying where the files are instead."""
+    sentence to add to the report saying where the files are instead.
+    `on_stage(text, force=False)` hears about progress, `on_analysed(rows)`
+    gets the page-count results, and `outcome` (a dict) is given the link."""
+    stage = on_stage or (lambda text, force=False: None)
     wetransfer_link = None
     try:
         all_rows = []
-        for path in saved_paths:
+        total = len(saved_paths)
+        for i, path in enumerate(saved_paths, start=1):
+            stage(f"Counting pages ({i} of {total})", force=(i == 1))
             all_rows.extend(analyze_file(path, os.path.basename(path)))
+        stage(f"Counting pages done ({total} of {total})", force=True)
+        if on_analysed:
+            try:
+                on_analysed(all_rows)
+            except Exception as e:
+                logger.warning(f"Submission {submission_id}: couldn't save history details - {e}")
 
         wetransfer_error = None
+        service = _transfer_service_name()
         try:
-            wetransfer_link = upload_submission(saved_paths, message=f"Quote request {reference_number}")
+            stage(f"Sending to {service} (0 of {total})", force=True)
+            wetransfer_link = upload_submission(
+                saved_paths, message=_transfer_title(reference_number, contact),
+                on_progress=lambda n, t: stage(f"Sending to {service} ({n} of {t})", force=(n == t)))
         except Exception as e:
             wetransfer_error = str(e)
             logger.error(f"Submission {submission_id}: file transfer upload failed - {wetransfer_error}")
@@ -588,14 +778,19 @@ def process_submission(submission_id, saved_paths, client_note, contact, referen
 
         html_body = rows_to_html(all_rows, submission_id, client_note,
                                  wetransfer_link=wetransfer_link, wetransfer_error=wetransfer_error,
-                                 contact=contact, reference_number=reference_number)
-        csv_bytes = rows_to_csv(all_rows).encode("utf-8")
+                                 contact=contact, reference_number=reference_number,
+                                 folder_info=folder_info, plans_to_scale=plans_to_scale)
+        csv_bytes = rows_to_csv(all_rows, folder_info, plans_to_scale).encode("utf-8")
         csv_name = f"analysis_{reference_number}.csv"
         flagged = sum(1 for r in all_rows if r.flagged)
         subject_line = (f"[Quote request {reference_number}] {contact.get('subject') or ''} - "
-                        f"{len(saved_paths)} file(s)" + (f" - {flagged} flagged for review" if flagged else ""))
+                        f"{len(saved_paths)} file(s)" + (f" - {flagged} flagged for review" if flagged else "")
+                        + {True: " - TO SCALE", False: " - A3 FOLDED", None: ""}[plans_to_scale])
         files_to_attach = [] if wetransfer_link else saved_paths
+        if outcome is not None:
+            outcome["link"] = wetransfer_link or ""
 
+        stage("Emailing the report", force=True)
         sent, message = send_report_email(
             subject=subject_line,
             html_body=html_body,
@@ -745,6 +940,7 @@ def attention():
             "reference_number": status.get("reference_number", "?"),
             "status": status.get("status", "?"),
             "error": status.get("error", ""),
+            "stage": status.get("stage", ""),
             "contact": status.get("contact", {}),
             "updated_at": status.get("updated_at", ""),
             "file_count": len(files),
@@ -795,9 +991,252 @@ def attention_delete():
         return "Not found.", 404
     submission_id = request.form.get("submission_id", "")
     if re.fullmatch(r"\d{8}-\d{6}-[0-9a-f]{6}", submission_id):
+        status = _load_status(submission_id)
+        if status:
+            status["status"] = "files_deleted"
+            status["stage"] = ""
+            status["updated_at"] = _now_iso()
+            history.save(_record_from_status(status))
         removed = r2_storage.delete_prefix(f"incoming/{submission_id}/")
         logger.info(f"Deleted {submission_id} from storage on request ({removed} object(s)).")
     return redirect(url_for("attention", key=request.form["key"]))
+
+
+# ==========================================================================
+# Client submission history - no accounts, just a private emailed link
+# ==========================================================================
+
+def _history_link(portal_url, email):
+    params = history.make_link_params(_token_secret(), history.email_key(email))
+    return f"{portal_url}/my-submissions?{urlencode(params)}"
+
+
+def _email_wrapper(inner_html):
+    return ("<html><body style=\"font-family:Arial,Helvetica,sans-serif;color:#222;line-height:1.5;"
+            "max-width:560px\">" + inner_html + "</body></html>")
+
+
+def _button(url, text):
+    return (f'<p style="margin:22px 0"><a href="{html_lib.escape(url)}" style="display:inline-block;'
+            f'background:#2980b9;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;'
+            f'font-weight:bold">{html_lib.escape(text)}</a></p>')
+
+
+def _send_confirmation_email(contact, reference_number, portal_url, plans_to_scale=None):
+    """Tells the client their quote request arrived, with their reference
+    number and a link to their submission history. Never raises."""
+    if not history.is_enabled():
+        return
+    try:
+        first_name = (contact.get("full_name") or "").split(" ")[0]
+        link = _history_link(portal_url, contact.get("email"))
+        subject_line = contact.get("subject") or "your quote request"
+        body = _email_wrapper(
+            f"<p>Hi {html_lib.escape(first_name) or 'there'},</p>"
+            f"<p>Thanks - we've received the files for <b>{html_lib.escape(subject_line)}</b>. "
+            f"Your reference number is <b>{html_lib.escape(reference_number)}</b>. "
+            f"We'll be in touch with your quote shortly.</p>"
+            + ({True: "<p>You asked for plans to be <b>printed to scale</b>.</p>",
+                False: "<p>You didn't tick <b>plans printed to scale</b>, so plans will be printed at A3 and "
+                       "folded. If that's not right, just reply to let us know.</p>",
+                None: ""}[plans_to_scale]) +
+            f"<p>You can see everything you've sent us from this email address here:</p>"
+            + _button(link, "View my submissions") +
+            f"<p style=\"font-size:12px;color:#777\">This link is private to you and works for "
+            f"{history.LINK_VALID_DAYS} days. You can get a new one any time at "
+            f"{html_lib.escape(portal_url)}/my-submissions</p>")
+        sent, message = send_client_email(contact.get("email"),
+                                          f"We've received your files - ref {reference_number}", body)
+        logger.info(f"Confirmation email for {reference_number}: sent={sent} - {message}")
+    except Exception as e:
+        logger.warning(f"Confirmation email for {reference_number} failed: {e}")
+
+
+CLIENT_STATUS_LABELS = {
+    "count": {"processing": "Counting", "done": "Page count complete", "failed": "Didn't finish - please try again"},
+    "quote": {},  # quotes always show "Received" - the internal steps are ours to worry about
+}
+
+
+def _client_view(record, link_params):
+    kind = record.get("kind", "quote")
+    label = CLIENT_STATUS_LABELS.get(kind, {}).get(record.get("status"), "Received")
+    report_url = None
+    if record.get("has_report"):
+        report_url = url_for("my_submission_report", sid=record["submission_id"], **link_params)
+    contact = record.get("contact") or {}
+    return {
+        "reference_number": record.get("reference_number", ""),
+        "date": (record.get("created_at") or "")[:10],
+        "kind": "Page count" if kind == "count" else "Quote request",
+        "subject": contact.get("subject", ""),
+        "status": label,
+        "file_count": record.get("file_count"),
+        "total_items": record.get("total_items"),
+        "sheets": record.get("sheets"),
+        "tabs": record.get("tabs"),
+        "dividers": record.get("dividers"),
+        "plans": {True: "Plans printed to scale", False: "Plans printed at A3 and folded"}.get(record.get("plans_to_scale"), ""),
+        "sizes": record.get("sizes") or [],
+        "report_url": report_url,
+    }
+
+
+_link_request_times = {}
+_link_request_lock = threading.Lock()
+LINK_REQUEST_GAP_SECONDS = 120
+LINK_REQUESTS_PER_IP_PER_HOUR = 10
+
+
+def _link_request_allowed(email_key):
+    """Stops the 'email me a link' form being used to flood someone's inbox."""
+    now = time.time()
+    ip = request.remote_addr or "?"
+    with _link_request_lock:
+        for k in [k for k, v in _link_request_times.items() if now - max(v) > 3600]:
+            del _link_request_times[k]
+        ip_times = [t for t in _link_request_times.get(("ip", ip), []) if now - t < 3600]
+        last_for_email = _link_request_times.get(("email", email_key), [0])[-1]
+        if len(ip_times) >= LINK_REQUESTS_PER_IP_PER_HOUR or now - last_for_email < LINK_REQUEST_GAP_SECONDS:
+            return False
+        _link_request_times[("ip", ip)] = ip_times + [now]
+        _link_request_times[("email", email_key)] = [now]
+        return True
+
+
+@app.route("/my-submissions", methods=["GET"])
+def my_submissions():
+    if not history.is_enabled():
+        return _no_store(Response(render_template("my_submissions.html", mode="unavailable")))
+    c, x, t = request.args.get("c"), request.args.get("x"), request.args.get("t")
+    if not (c or x or t):
+        return _no_store(Response(render_template("my_submissions.html", mode="ask")))
+    ok, reason = history.check_link_params(_token_secret(), c, x, t)
+    if not ok:
+        return _no_store(Response(render_template("my_submissions.html", mode="ask", link_problem=reason)))
+    try:
+        records = history.list_for_client(c)
+    except Exception as e:
+        logger.error(f"History: couldn't list submissions - {e}")
+        return _no_store(Response(render_template("my_submissions.html", mode="error"), status=503))
+    link_params = {"c": c, "x": x, "t": t}
+    expires = datetime.fromtimestamp(int(x), timezone.utc).strftime("%d %B %Y")
+    return _no_store(Response(render_template(
+        "my_submissions.html", mode="list", expires=expires,
+        submissions=[_client_view(r, link_params) for r in records])))
+
+
+@app.route("/my-submissions", methods=["POST"])
+def my_submissions_request_link():
+    if not history.is_enabled():
+        return redirect(url_for("my_submissions"))
+    email = (request.form.get("email") or "").strip()
+    if "@" in email and len(email) <= 254:
+        key = history.email_key(email)
+        if _link_request_allowed(key):
+            threading.Thread(target=_send_history_link, args=(email, key, request.host_url.rstrip("/")),
+                             daemon=True).start()
+        else:
+            logger.info("History link request skipped (too soon since the last one).")
+    # The same reply whether or not that address has submissions, so the form
+    # can't be used to find out who's a client.
+    return _no_store(Response(render_template("my_submissions.html", mode="sent")))
+
+
+def _send_history_link(email, key, portal_url):
+    try:
+        if not any(True for _ in r2_storage.list_objects(f"history/clients/{key}/")):
+            logger.info("History link requested for an address with no submissions - nothing sent.")
+            return
+        link = _history_link(portal_url, email)
+        body = _email_wrapper(
+            "<p>Hi,</p><p>Here's your private link to see everything you've sent us from this email address:</p>"
+            + _button(link, "View my submissions") +
+            f"<p style=\"font-size:12px;color:#777\">The link works for {history.LINK_VALID_DAYS} days. "
+            f"If you didn't ask for it, you can ignore this email.</p>")
+        sent, message = send_client_email(email, "Your submissions link", body)
+        logger.info(f"History link email: sent={sent} - {message}")
+    except Exception as e:
+        logger.warning(f"History link email failed: {e}")
+
+
+@app.route("/my-submissions/report")
+def my_submission_report():
+    c, x, t, sid = (request.args.get(k) for k in ("c", "x", "t", "sid"))
+    ok, _reason = history.check_link_params(_token_secret(), c, x, t)
+    if not ok or not re.fullmatch(SUBMISSION_ID_RE, sid or "") or not history.is_enabled():
+        return redirect(url_for("my_submissions"))
+    if not history.client_owns(c, sid):
+        return "Not found.", 404
+    report_html = history.get_report(sid)
+    if not report_html:
+        return "That report isn't available.", 404
+    return _no_store(Response(report_html, mimetype="text/html"))
+
+
+# ==========================================================================
+# Admin: every submission
+# ==========================================================================
+
+ADMIN_STATUS_LABELS = {
+    "received": "Received", "processing": "Processing", "needs_attention": "Needs attention",
+    "sent": "Sent", "files_deleted": "Files deleted by admin",
+    "done": "Counted", "failed": "Count failed",
+}
+
+
+@app.route("/admin/submissions")
+def admin_submissions():
+    if not ADMIN_KEY:
+        return "Not found.", 404
+    if not _admin_ok():
+        return render_template("admin_login.html", wrong=bool(request.values.get("key")),
+                               action=url_for("admin_submissions"))
+    key = request.values["key"]
+    if not history.is_enabled():
+        return render_template("admin_submissions.html", key=key, storage_missing=True, rows=[], q="",
+                               kind="", total=0, page=1, pages=1)
+    q = (request.args.get("q") or "").strip()
+    kind = request.args.get("kind") or ""
+    try:
+        records = history.list_all()
+    except Exception as e:
+        logger.error(f"Admin submissions: couldn't list history - {e}")
+        return "Couldn't load submissions from storage just now - please refresh in a minute.", 503
+    if kind in ("quote", "count"):
+        records = [r for r in records if r.get("kind") == kind]
+    if q:
+        needle = q.lower()
+
+        def matches(r):
+            c = r.get("contact") or {}
+            hay = " ".join(str(v) for v in (r.get("reference_number"), c.get("email"), c.get("company"),
+                                             c.get("full_name"), c.get("subject"), c.get("phone")))
+            return needle in hay.lower()
+        records = [r for r in records if matches(r)]
+    per_page = 100
+    pages = max(1, (len(records) + per_page - 1) // per_page)
+    page_arg = request.args.get("page") or "1"
+    page = min(max(1, int(page_arg) if page_arg.isdigit() else 1), pages)
+    rows = []
+    for r in records[(page - 1) * per_page: page * per_page]:
+        rows.append(dict(r, status_label=ADMIN_STATUS_LABELS.get(r.get("status"), r.get("status") or "?"),
+                         created=(r.get("created_at") or "")[:16].replace("T", " ")))
+    return render_template("admin_submissions.html", key=key, storage_missing=False, rows=rows, q=q, kind=kind,
+                           total=len(records), page=page, pages=pages)
+
+
+@app.route("/admin/submissions/report")
+def admin_submission_report():
+    if not _admin_ok():
+        return "Not found.", 404
+    sid = request.args.get("sid", "")
+    if not re.fullmatch(SUBMISSION_ID_RE, sid):
+        return "Not found.", 404
+    report_html = history.get_report(sid)
+    if not report_html:
+        return "That report isn't available.", 404
+    return _no_store(Response(report_html, mimetype="text/html"))
 
 
 if __name__ == "__main__":

@@ -25,7 +25,7 @@ class FileTransferError(Exception):
     pass
 
 
-def upload_submission(file_paths, message="Client portal submission"):
+def upload_submission(file_paths, message="Client portal submission", on_progress=None):
     """Returns a shareable download link (str), or None if no provider is
     configured. Raises FileTransferError (with the underlying provider's
     message) if the configured provider fails."""
@@ -37,7 +37,7 @@ def upload_submission(file_paths, message="Client portal submission"):
 
     if TRANSFERNOW_API_KEY:
         try:
-            return upload_via_transfernow(file_paths, message)
+            return upload_via_transfernow(file_paths, message, on_progress=on_progress)
         except TransferNowError as e:
             raise FileTransferError(f"TransferNow: {e}")
 
