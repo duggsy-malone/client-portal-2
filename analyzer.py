@@ -70,7 +70,11 @@ def analyze_pdf(path, source_file, location=""):
     rows = []
     try:
         from pypdf import PdfReader
-        reader = PdfReader(path)
+        # Pass an open file, not the path: given a path, pypdf reads the whole
+        # file into memory first (+240 MB for a 250 MB PDF), which is enough to
+        # crash a 512 MB server. Given a file, it reads only what it needs.
+        pdf_file = open(path, "rb")
+        reader = PdfReader(pdf_file)
         if reader.is_encrypted:
             try:
                 reader.decrypt("")
@@ -93,6 +97,11 @@ def analyze_pdf(path, source_file, location=""):
     except Exception as e:
         rows.append(Row(source_file, location, "PDF", "Whole document",
                          flagged=True, notes=f"Could not read PDF: {e}"))
+    finally:
+        try:
+            pdf_file.close()
+        except NameError:
+            pass
     return rows
 
 
@@ -130,15 +139,42 @@ def analyze_image(path, source_file, location=""):
     return rows
 
 
+def _local(tag):
+    """XML tag name without its namespace, e.g. '{...main}sheet' -> 'sheet'."""
+    return tag.rsplit("}", 1)[-1]
+
+
+def _zip_part_path(base_dir, target):
+    import posixpath
+    if target.startswith("/"):
+        return target.lstrip("/")
+    return posixpath.normpath(posixpath.join(base_dir, target))
+
+
 def analyze_pptx(path, source_file, location=""):
+    """Slide size and count, read straight from the deck's small
+    presentation.xml. (python-pptx loads every image in the deck into memory
+    - +180 MB for a 150 MB deck - which a 512 MB server can't afford.)"""
     rows = []
     try:
-        from pptx import Presentation
-        prs = Presentation(path)
-        w_mm = mm_from_emu(prs.slide_width)
-        h_mm = mm_from_emu(prs.slide_height)
+        import xml.etree.ElementTree as ET
+        with zipfile.ZipFile(path) as zf:
+            main = "ppt/presentation.xml"
+            try:
+                rels = ET.fromstring(zf.read("_rels/.rels"))
+                for rel in rels:
+                    if rel.get("Type", "").endswith("/officeDocument"):
+                        main = _zip_part_path("", rel.get("Target", main))
+            except KeyError:
+                pass
+            root = ET.fromstring(zf.read(main))
+        size = next((el for el in root.iter() if _local(el.tag) == "sldSz"), None)
+        if size is None:
+            raise ValueError("no slide size found in presentation")
+        w_mm = mm_from_emu(int(size.get("cx")))
+        h_mm = mm_from_emu(int(size.get("cy")))
+        slide_count = sum(1 for el in root.iter() if _local(el.tag) == "sldId")
         m = match_size(w_mm, h_mm, STANDARD_SLIDE_SIZES)
-        slide_count = len(prs.slides)
         rows.append(Row(
             source_file, location, "PPTX", f"{slide_count} slide(s) @ deck size",
             width_mm=w_mm, height_mm=h_mm,
@@ -167,66 +203,146 @@ def _excel_row_height_to_mm(height_pt):
     return mm_from_pixels(width_px, 96)
 
 
+def _col_letters_to_index(letters):
+    n = 0
+    for ch in letters:
+        n = n * 26 + (ord(ch) - 64)
+    return n
+
+
+def _col_index_to_letters(n):
+    out = ""
+    while n:
+        n, rem = divmod(n - 1, 26)
+        out = chr(65 + rem) + out
+    return out
+
+
+def _scan_sheet(zf, part):
+    """Streams through one worksheet's XML, keeping only what the size
+    estimate needs: print setup, column widths, custom row heights and the
+    extent of the cells. Memory stays flat however big the sheet is."""
+    import re
+    import xml.etree.ElementTree as ET
+    info = {"paper": None, "orientation": None, "cols": [], "heights": {},
+            "min_row": None, "max_row": None, "min_col": None, "max_col": None, "a1_has_value": False}
+    sheet_data = None
+    row_num = 0
+    col_num = 0
+    in_cell = None  # (row, col) of the cell being read
+    with zf.open(part) as fh:
+        for event, el in ET.iterparse(fh, events=("start", "end")):
+            name = _local(el.tag)
+            if event == "start":
+                if name == "sheetData":
+                    sheet_data = el
+                elif name == "row":
+                    r = el.get("r")
+                    row_num = int(r) if r else row_num + 1
+                    col_num = 0
+                    if el.get("ht"):
+                        info["heights"][row_num] = float(el.get("ht"))
+                elif name == "c":
+                    ref = el.get("r")
+                    m = re.match(r"([A-Z]+)(\d+)$", ref or "")
+                    if m:
+                        col_num = _col_letters_to_index(m.group(1))
+                        row_here = int(m.group(2))
+                    else:
+                        col_num += 1
+                        row_here = row_num
+                    in_cell = (row_here, col_num)
+                    for key, val, fn in (("min_row", row_here, min), ("max_row", row_here, max),
+                                         ("min_col", col_num, min), ("max_col", col_num, max)):
+                        info[key] = val if info[key] is None else fn(info[key], val)
+            else:
+                if name in ("v", "is") and in_cell == (1, 1) and (name == "is" or (el.text or "") != ""):
+                    info["a1_has_value"] = True
+                elif name == "c":
+                    in_cell = None
+                elif name == "col":
+                    info["cols"].append((int(el.get("min", 0)), int(el.get("max", 0)),
+                                         float(el.get("width")) if el.get("width") else None))
+                elif name == "pageSetup":
+                    info["paper"] = el.get("paperSize")
+                    info["orientation"] = el.get("orientation")
+                if name == "row" and sheet_data is not None:
+                    sheet_data.clear()  # drop finished rows so memory doesn't grow
+    return info
+
+
 def analyze_xlsx(path, source_file, location=""):
+    """Per sheet: the declared print paper size if set, otherwise an estimate
+    of the used range's physical size. Read by streaming the sheet XML rather
+    than openpyxl, which builds an object per cell (+670 MB for a 6 MB,
+    150,000-row sheet)."""
     rows = []
     try:
-        import openpyxl
-        wb = openpyxl.load_workbook(path, data_only=True)
-        for ws in wb.worksheets:
-            paper_code = ws.page_setup.paperSize
-            orientation = ws.page_setup.orientation
-            if paper_code is not None:
-                try:
-                    code_int = int(paper_code)
-                except (TypeError, ValueError):
-                    code_int = None
-                declared = EXCEL_PAPER_SIZE_CODES.get(code_int)
-                if declared:
-                    std_w, std_h = STANDARD_PAGE_SIZES.get(declared.split(" ")[0], (None, None))
-                    display_label = LABEL_ALIASES.get(declared, declared)
-                    rows.append(Row(
-                        source_file, location, "Excel", f"Sheet '{ws.title}' (declared print setup)",
-                        width_mm=std_w, height_mm=std_h,
-                        matched_size=display_label, is_standard=True,
-                        flagged=False,
-                        notes=f"Orientation: {orientation or 'not set'}."
-                    ))
+        import xml.etree.ElementTree as ET
+        with zipfile.ZipFile(path) as zf:
+            wb = ET.fromstring(zf.read("xl/workbook.xml"))
+            rels = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
+            targets = {rel.get("Id"): rel.get("Target", "") for rel in rels}
+            sheets = []
+            for el in wb.iter():
+                if _local(el.tag) != "sheet":
                     continue
-                else:
-                    rows.append(Row(
-                        source_file, location, "Excel", f"Sheet '{ws.title}' (declared print setup)",
-                        matched_size=f"Unrecognised paper code {code_int}", is_standard=False,
-                        flagged=True, notes="Sheet specifies a paper size we don't recognise - check manually."
-                    ))
+                rid = next((v for k, v in el.attrib.items() if _local(k) == "id"), None)
+                part = _zip_part_path("xl", targets.get(rid, ""))
+                if "/worksheets/" in f"/{part}":  # skip chart sheets etc, like openpyxl's wb.worksheets
+                    sheets.append((el.get("name"), part))
+
+            for title, part in sheets:
+                ws = _scan_sheet(zf, part)
+                if ws["paper"] is not None:
+                    try:
+                        code_int = int(ws["paper"])
+                    except (TypeError, ValueError):
+                        code_int = None
+                    declared = EXCEL_PAPER_SIZE_CODES.get(code_int)
+                    if declared:
+                        std_w, std_h = STANDARD_PAGE_SIZES.get(declared.split(" ")[0], (None, None))
+                        rows.append(Row(
+                            source_file, location, "Excel", f"Sheet '{title}' (declared print setup)",
+                            width_mm=std_w, height_mm=std_h,
+                            matched_size=LABEL_ALIASES.get(declared, declared), is_standard=True,
+                            flagged=False,
+                            notes=f"Orientation: {ws['orientation'] or 'not set'}."
+                        ))
+                    else:
+                        rows.append(Row(
+                            source_file, location, "Excel", f"Sheet '{title}' (declared print setup)",
+                            matched_size=f"Unrecognised paper code {code_int}", is_standard=False,
+                            flagged=True, notes="Sheet specifies a paper size we don't recognise - check manually."
+                        ))
                     continue
 
-            # No explicit paper size set - estimate physical size of the used range instead.
-            dim = ws.calculate_dimension()
-            if dim == "A1:A1" and ws["A1"].value is None:
-                rows.append(Row(source_file, location, "Excel", f"Sheet '{ws.title}'",
-                                 notes="Sheet appears empty.", flagged=False))
-                continue
+                if ws["min_row"] is None or (
+                        (ws["min_row"], ws["max_row"], ws["min_col"], ws["max_col"]) == (1, 1, 1, 1)
+                        and not ws["a1_has_value"]):
+                    rows.append(Row(source_file, location, "Excel", f"Sheet '{title}'",
+                                     notes="Sheet appears empty.", flagged=False))
+                    continue
 
-            min_col, min_row, max_col, max_row = openpyxl.utils.cell.range_boundaries(dim)
-            total_w_mm = 0.0
-            for c in range(min_col, max_col + 1):
-                letter = openpyxl.utils.get_column_letter(c)
-                cd = ws.column_dimensions.get(letter)
-                total_w_mm += _excel_col_width_to_mm(cd.width if cd else None)
-            total_h_mm = 0.0
-            for r in range(min_row, max_row + 1):
-                rd = ws.row_dimensions.get(r)
-                total_h_mm += _excel_row_height_to_mm(rd.height if rd else None)
+                dim = (f"{_col_index_to_letters(ws['min_col'])}{ws['min_row']}:"
+                       f"{_col_index_to_letters(ws['max_col'])}{ws['max_row']}")
+                total_w_mm = 0.0
+                for c in range(ws["min_col"], ws["max_col"] + 1):
+                    width = next((w for lo, hi, w in ws["cols"] if lo <= c <= hi and w is not None), None)
+                    total_w_mm += _excel_col_width_to_mm(width)
+                total_h_mm = 0.0
+                for r in range(ws["min_row"], ws["max_row"] + 1):
+                    total_h_mm += _excel_row_height_to_mm(ws["heights"].get(r))
 
-            m = match_page_size(total_w_mm, total_h_mm)
-            rows.append(Row(
-                source_file, location, "Excel", f"Sheet '{ws.title}' (estimated from used range {dim})",
-                width_mm=total_w_mm, height_mm=total_h_mm,
-                matched_size=m.label, is_standard=m.is_standard,
-                flagged=True,  # always flag estimated (non-declared) sheets for a manual glance
-                notes=("No print area/paper size set in the file - size is an ESTIMATE from column/row "
-                       "dimensions, not a true print size. Please sanity-check before quoting.")
-            ))
+                m = match_page_size(total_w_mm, total_h_mm)
+                rows.append(Row(
+                    source_file, location, "Excel", f"Sheet '{title}' (estimated from used range {dim})",
+                    width_mm=total_w_mm, height_mm=total_h_mm,
+                    matched_size=m.label, is_standard=m.is_standard,
+                    flagged=True,  # always flag estimated (non-declared) sheets for a manual glance
+                    notes=("No print area/paper size set in the file - size is an ESTIMATE from column/row "
+                           "dimensions, not a true print size. Please sanity-check before quoting.")
+                ))
     except Exception as e:
         rows.append(Row(source_file, location, "Excel", "Whole file",
                          flagged=True, notes=f"Could not read spreadsheet: {e}"))

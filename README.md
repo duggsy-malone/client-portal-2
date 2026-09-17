@@ -297,6 +297,7 @@ analyzer.py     - the core file-analysis logic (PDF/JPG/PPTX/XLSX/ZIP)
 paper_sizes.py  - reference tables of standard page/slide sizes + matching logic
 report.py       - builds the HTML email body and CSV attachment from analysis results
 reference_number.py - generates the short DDMMYY-NNNNN reference shown in reports/emails
+file_part.py    - streams large file parts to TransferNow/WeTransfer without loading them into memory
 emailer.py      - sends the report via Brevo or SMTP (falls back to saving locally if neither configured)
 file_transfer.py     - picks WeTransfer or TransferNow for uploading originals, based on which API key is set
 wetransfer_upload.py - WeTransfer provider (for your paid account, once reachable)
@@ -316,6 +317,7 @@ render.yaml     - one-click deployment config for Render.com (see "Going live" b
 
 - **Retention period**: change `RETENTION_DAYS` in `app.py`.
 - **Upload size cap**: change `MAX_CONTENT_LENGTH` in `app.py` (currently 5GB) and `MAX_TOTAL_BYTES` in `templates/index.html` to match. This is this app's own cap - it's separate from (and smaller than) the Cloudflare edge limit that large uploads actually run into; see "Large files: Cloudflare R2" above for what actually makes big uploads work reliably.
+- **Memory / Render plan**: files are read without loading them whole into memory (PDFs, PowerPoint and Excel are read piece by piece, and parts sent to TransferNow are streamed from disk). A rehearsal job of 406 files / 909 MB, including a 254 MB PDF, a 152 MB PowerPoint and a 150,000-row spreadsheet, peaked at 66 MB, so the 512 MB Starter plan is enough. (Before this, a single large spreadsheet could use 670 MB and crash the server.)
 - **Size tolerance** (how close to A4 counts as "A4"): change `TOLERANCE_MM` in `paper_sizes.py`.
 - **Notable sizes** (roller banners, squares, Legal->A4 grouping): `ROLLER_BANNER_BANDS`, `SQUARE_SIZES`, `LABEL_ALIASES` in `paper_sizes.py`.
 - **Required form fields**: `REQUIRED_FIELDS_ALWAYS` / `REQUIRED_FIELDS_FULL_SUBMISSION` in `app.py`, and the matching inputs in `templates/index.html`.

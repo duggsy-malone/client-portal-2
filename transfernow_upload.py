@@ -14,6 +14,8 @@ response shapes.
 import os
 import logging
 import requests
+
+from file_part import put_file_part
 from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger("portal.transfernow")
@@ -95,29 +97,28 @@ def _upload_one_file(transfer_id, file_path, file_info):
     upload_id = file_info["multipartUpload"]["uploadId"]
     parts = file_info["multipartUpload"]["parts"]
 
-    with open(file_path, "rb") as f:
-        for part in parts:
-            part_number = part["partNumber"]
-            f.seek(part["start"])
-            chunk = f.read(part["size"])
+    # Each part is streamed from disk rather than read into memory first -
+    # parts can be large, and this server may only have 512 MB.
+    for part in parts:
+        part_number = part["partNumber"]
 
-            url_resp = requests.get(
-                f"{BASE_URL}/transfers/{transfer_id}/files/{file_id}/parts/{part_number}",
-                headers=_headers(),
-                params={"uploadId": upload_id},
-                timeout=REQUEST_TIMEOUT,
+        url_resp = requests.get(
+            f"{BASE_URL}/transfers/{transfer_id}/files/{file_id}/parts/{part_number}",
+            headers=_headers(),
+            params={"uploadId": upload_id},
+            timeout=REQUEST_TIMEOUT,
+        )
+        if not url_resp.ok:
+            raise TransferNowError(
+                f"Getting upload URL failed for {file_path} part {part_number} "
+                f"({url_resp.status_code}): {url_resp.text}"
             )
-            if not url_resp.ok:
-                raise TransferNowError(
-                    f"Getting upload URL failed for {file_path} part {part_number} "
-                    f"({url_resp.status_code}): {url_resp.text}"
-                )
-            upload_url = url_resp.json()["uploadUrl"]
-            put_resp = requests.put(upload_url, data=chunk, timeout=REQUEST_TIMEOUT)
-            if not put_resp.ok:
-                raise TransferNowError(
-                    f"Uploading part {part_number} of {file_path} failed ({put_resp.status_code})"
-                )
+        upload_url = url_resp.json()["uploadUrl"]
+        put_resp = put_file_part(upload_url, file_path, part["start"], part["size"], REQUEST_TIMEOUT)
+        if not put_resp.ok:
+            raise TransferNowError(
+                f"Uploading part {part_number} of {file_path} failed ({put_resp.status_code})"
+            )
 
     done_resp = requests.put(
         f"{BASE_URL}/transfers/{transfer_id}/files/{file_id}/upload-done",

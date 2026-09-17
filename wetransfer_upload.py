@@ -25,6 +25,8 @@ import os
 import logging
 import requests
 
+from file_part import put_file_part
+
 logger = logging.getLogger("portal.wetransfer")
 
 WETRANSFER_API_KEY = os.environ.get("WETRANSFER_API_KEY")
@@ -104,25 +106,27 @@ def _upload_one_file(token, transfer_id, file_path, file_info):
     part_numbers = multipart["part_numbers"]
     chunk_size = multipart["chunk_size"]
 
-    with open(file_path, "rb") as f:
-        for part_number in range(1, part_numbers + 1):
-            chunk = f.read(chunk_size)
-            url_resp = requests.get(
-                f"{BASE_URL}/v2/transfers/{transfer_id}/files/{file_id}/upload-url/{part_number}",
-                headers=_auth_headers(token),
-                timeout=REQUEST_TIMEOUT,
+    file_size = os.path.getsize(file_path)
+    # Each part is streamed from disk rather than read into memory first.
+    for part_number in range(1, part_numbers + 1):
+        start = (part_number - 1) * chunk_size
+        size = max(0, min(chunk_size, file_size - start))
+        url_resp = requests.get(
+            f"{BASE_URL}/v2/transfers/{transfer_id}/files/{file_id}/upload-url/{part_number}",
+            headers=_auth_headers(token),
+            timeout=REQUEST_TIMEOUT,
+        )
+        if not url_resp.ok:
+            raise WeTransferError(
+                f"Getting upload URL failed for {file_path} part {part_number} "
+                f"({url_resp.status_code}): {url_resp.text}"
             )
-            if not url_resp.ok:
-                raise WeTransferError(
-                    f"Getting upload URL failed for {file_path} part {part_number} "
-                    f"({url_resp.status_code}): {url_resp.text}"
-                )
-            upload_url = url_resp.json()["url"]
-            put_resp = requests.put(upload_url, data=chunk, timeout=REQUEST_TIMEOUT)
-            if not put_resp.ok:
-                raise WeTransferError(
-                    f"Uploading part {part_number} of {file_path} failed ({put_resp.status_code})"
-                )
+        upload_url = url_resp.json()["url"]
+        put_resp = put_file_part(upload_url, file_path, start, size, REQUEST_TIMEOUT)
+        if not put_resp.ok:
+            raise WeTransferError(
+                f"Uploading part {part_number} of {file_path} failed ({put_resp.status_code})"
+            )
 
     complete_resp = requests.post(
         f"{BASE_URL}/v2/transfers/{transfer_id}/files/{file_id}/upload-complete",
