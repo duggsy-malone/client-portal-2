@@ -40,7 +40,7 @@ All of this lives in `paper_sizes.py` (`ROLLER_BANNER_BANDS`, `SQUARE_SIZES`, `L
 
 ### "I just want to count my pages"
 
-Ticking this box on the form skips the normal quote pipeline entirely: nothing is emailed to you and nothing is uploaded to WeTransfer/TransferNow. Instead, the files are analysed on the spot, a report opens directly in the client's browser (a new tab), and the files are deleted from the server immediately afterwards rather than being kept for 30 days. Subject, full name, company, email and phone are still required in this mode; deadline and delivery address are not (since nothing is actually being sent to you to action).
+Ticking this box on the form skips the normal quote pipeline entirely: nothing is emailed to you and nothing is uploaded to WeTransfer/TransferNow. Instead, the files are analysed and a report opens directly in the client's browser (a new tab); the files are deleted straight afterwards rather than being kept. Subject, full name, company, email and phone are still required in this mode; deadline and delivery address are not (since nothing is actually being sent to you to action).
 
 ### Reference numbers
 
@@ -48,7 +48,7 @@ Every report/email now shows a short reference number in the format **DDMMYY-NNN
 
 This number is generated from a simple counter (`submission_counter.txt`, created automatically next to the app) that just keeps going up - it does **not** reset daily, so the next submission after `160926-00001` is `160926-00002`, `160926-00003`, and so on, whatever the date.
 
-One honest caveat: that counter file lives on Render's free-tier disk, which is **not guaranteed to persist** - a redeploy, or the app spinning back up after the free tier puts it to sleep from inactivity, can occasionally reset it back to 1. If that happens, the numbers just start again from `160926-00001` at some point - it's a cosmetic reset only. It can't cause any files or reports to be lost, because the reference number is never used to name or locate anything on the server (the actual storage folder for each submission still uses its own separate, always-unique internal ID behind the scenes). If this ever bothers you in practice, the fix is a paid Render instance with a persistent disk - let me know and I can help set that up.
+Render wipes the server's disk on every redeploy, so once Cloudflare R2 is set up (see "Large files: Cloudflare R2"), a copy of the counter is also kept in R2 and numbering carries on after a redeploy instead of restarting at 00001. Without R2 it can still restart occasionally; that's cosmetic only, since reference numbers are never used to name or find files.
 
 ## Known limitations (be aware of these before quoting off the report alone)
 
@@ -236,65 +236,63 @@ Two different things can cause this, and it's worth knowing both since they were
 
 2. **Render sits behind Cloudflare, which enforces its own hard upload size limit** (commonly around 100MB) completely separately from anything Render or this app controls - a request over that size gets rejected right at the door, before it ever reaches Render's servers, gunicorn, or this app's code. This is the one that was actually causing multi-hundred-MB/GB uploads to fail instantly, with nothing at all showing up in Render's own logs (the request never got that far). No app-level setting fixes this - see the next section for the actual workaround.
 
-## Large files: Google Drive bypass
+## Large files: Cloudflare R2
 
-Because of the Cloudflare limit above, this app can send big files a different way: straight from the client's browser to a Google Drive folder (bypassing Render/Cloudflare entirely for the actual file bytes), and then pull them back down server-side just to run the page-count analysis. WeTransfer/TransferNow (see "Getting the original files" above) is unchanged and still does the actual "here's a link to download the originals" part of the report - Drive is only ever a temporary relay to get past the edge limit, and the Drive copies are deleted again once a submission finishes processing.
+Because of the Cloudflare limit above, big uploads can't come straight to this app. Instead, the client's browser sends each file directly to **Cloudflare R2** (online file storage), and this app then pulls the files down in the background to count pages, sends them on via TransferNow/WeTransfer, and emails you the report. R2 is only a stopover: files are deleted from it once they've safely reached you.
 
-**Until this is set up, uploads fall back automatically to the old direct route** (still subject to the Cloudflare limit for big files, but fine for smaller ones) - so there's no rush, and nothing breaks in the meantime.
+(An earlier version used Google Drive for this. Google blocks bursts of requests from shared cloud-server addresses like Render's as "automated queries", which broke jobs with hundreds of files, so it was replaced. The Google settings in Render - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN` - are no longer used and can be deleted.)
 
-### One-time setup
+**Until R2 is set up, uploads fall back automatically to the direct route** (fine for smaller files; big ones still hit the Cloudflare limit).
 
-This needs a real Google account with actual storage behind it - **not** a bare "service account" (that has zero storage of its own unless backed by a paid Workspace domain-wide delegation setup, which is its own can of worms). Since sandyboy.co.uk is on Google Workspace, authorizing this app against your own Workspace account is the way to go, and - because it's "Internal" to your own organisation - Google won't require the app to go through their public verification review.
+### One-time setup (about 15 minutes)
 
-1. **Create a Google Cloud project** (free): go to https://console.cloud.google.com, and create a new project (top-left project picker -> New Project). Any name is fine, e.g. "Client Portal".
-2. **Enable the Drive API**: in that project, go to **APIs & Services -> Library**, search for "Google Drive API", and click **Enable**.
-3. **Configure the OAuth consent screen**: **APIs & Services -> OAuth consent screen**. Choose **Internal** as the User Type (this is what skips Google's verification review - it's only available because your domain is on Workspace). Fill in an app name (e.g. "Client Portal") and your email, save.
-4. **Create OAuth credentials**: **APIs & Services -> Credentials -> Create Credentials -> OAuth client ID**. Application type: **Web application**. Under **Authorized redirect URIs**, add:
+1. **Create a Cloudflare account** at https://dash.cloudflare.com/sign-up (free). You don't need to move your website or domain to Cloudflare for this.
+2. **Turn on R2**: in the Cloudflare dashboard go to **Storage & databases -> R2 -> Overview** and complete the sign-up/checkout. It may ask for a card even though this portal's usage should stay inside the free monthly allowance (10 GB of storage; files only sit there briefly, and downloads are free).
+3. **Create a bucket** (a storage area): click **Create bucket**, name it `portal-uploads`, leave location on Automatic, and create it.
+4. **Allow uploads from your portal's web page (CORS)**: open the bucket -> **Settings** -> **CORS Policy** -> **Add CORS policy**, and paste exactly this (swap in your portal's address if it ever changes):
+   ```json
+   [
+     {
+       "AllowedOrigins": ["https://client-portal-2.onrender.com"],
+       "AllowedMethods": ["PUT"],
+       "AllowedHeaders": ["Content-Type"],
+       "MaxAgeSeconds": 3600
+     }
+   ]
    ```
-   https://client-portal-2.onrender.com/admin/gdrive-callback
+   Save. Without this, browsers refuse to send the files.
+5. **Create an access key**: back on the **R2 Overview** page, under **Account Details**, click **Manage** next to **API Tokens** -> **Create User API token**. Give it a name ("client portal"), choose permission **Object Read & Write**, and restrict it to the `portal-uploads` bucket. Create it, then copy the **Access Key ID** and **Secret Access Key** straight away - the secret is only shown once. The same Account Details box shows your **Account ID**.
+6. **Add these in Render -> Environment**, then save (it redeploys):
    ```
-   (swap in your actual Render URL if it's different). Save, then copy the **Client ID** and **Client Secret** it gives you.
-5. **Set environment variables** in Render's Environment tab:
+   R2_ACCOUNT_ID=<your Account ID>
+   R2_ACCESS_KEY_ID=<Access Key ID>
+   R2_SECRET_ACCESS_KEY=<Secret Access Key>
+   R2_BUCKET=portal-uploads
    ```
-   GOOGLE_CLIENT_ID=<the client ID from step 4>
-   GOOGLE_CLIENT_SECRET=<the client secret from step 4>
-   GDRIVE_ADMIN_KEY=<make up any random password - this just stops strangers from finding the setup page>
-   ```
-   Save and let it redeploy.
-6. **Authorize the app against your Drive**: once redeployed, visit (in your own browser, signed into your Workspace Google account):
-   ```
-   https://client-portal-2.onrender.com/admin/gdrive-auth?key=<the GDRIVE_ADMIN_KEY you just set>
-   ```
-   Google will show its normal consent screen ("Client Portal wants access to...") - approve it. You'll land on a page showing a long **refresh token** value.
-7. **Copy that refresh token** into Render's Environment tab as one more variable:
-   ```
-   GOOGLE_REFRESH_TOKEN=<the value shown on that page>
-   ```
-   Save. Once this redeploys, large uploads switch over to the Drive bypass automatically - nothing else to change, and no client-facing difference except that big files now actually work.
+   Keep `GDRIVE_ADMIN_KEY` - it's now the password for the admin pages below (or add `ADMIN_KEY` with a new password instead).
+7. **Check it**: visit `https://client-portal-2.onrender.com/admin/storage-check?key=<your admin password>`. It saves, reads back, lists and deletes a small test file and shows each step's result; the page should start with `"all_ok": true`.
 
-**That refresh token is a credential** - anyone who has it can act as this Drive connection. Don't paste it anywhere other than Render's Environment tab.
+### What happens to files
 
-### Checking the Google connection
-
-Visit `https://client-portal-2.onrender.com/admin/drive-check?key=<your GDRIVE_ADMIN_KEY>`. It runs each Google step the upload uses (get an access token, create a folder, open an upload slot, list, delete) and shows whether each worked and how long it took, stopping at the first failure. It creates and immediately deletes a folder called "Drive check - safe to delete". If uploads get stuck on "Preparing your upload...", this is the first thing to look at.
-
-### Storage/cleanup
-
-Files normally only sit in Drive briefly. For a quote request, the client is told "received" as soon as their upload reaches Drive; the app then pulls the files down in the background, analyses them, creates the TransferNow/WeTransfer link and emails you. The Drive copies are deleted only once that download link exists. For "just count my pages", they're deleted as soon as the pages are counted.
-
-**If something goes wrong after the client has been told "received"** (Google can't be reached to pull the files back, or TransferNow/WeTransfer fails), the files are **not** deleted. The folder is renamed **"NEEDS ATTENTION - quote ref …"** in your Google Drive, and the email you get says so. Grab the files from there, then delete the folder yourself once you're done.
-
-Folders from uploads a client started but never finished (closed the tab, lost connection) are removed automatically after 24 hours. "NEEDS ATTENTION" folders are never touched by that cleanup.
+- **Quote request:** the client sees "received" as soon as their upload finishes. In the background the app downloads the files, counts pages, creates the TransferNow link and emails you. The copy in R2 is deleted only once that link exists.
+- **Just count my pages:** the page checks back every couple of seconds ("Fetching your files (12 of 433)...", "Counting pages...") and shows the report when it's ready. The files are deleted from R2 straight after.
+- **If something goes wrong** (TransferNow down, a download failing, the server restarting mid-job): the files are kept in R2 and flagged, and you get an email. Open **`https://client-portal-2.onrender.com/admin/attention`** (it asks for your admin password) to download the files, **Try processing again**, or **Delete from storage** once you're done.
+- **Interrupted jobs** (e.g. by a redeploy) are restarted automatically within about 3 hours; after 3 failed attempts they're flagged for attention instead.
+- **Abandoned uploads** (client closed the tab part-way) are deleted after 24 hours. Flagged jobs are never deleted automatically.
 
 ### What the client sees while uploading
 
-"Preparing your upload..." (animated bar), then "Uploading - 2 of 5 files done - 120 MB of 480 MB (25%)" with a filling bar, then "Upload complete - finishing up..." (or "counting your pages...") until it's done. Up to 3 files upload at once. If they try to close the tab mid-upload, the browser asks them to confirm.
+"Preparing your upload..." then "Uploading - 2 of 5 files done - 120 MB of 480 MB (25%)" with a filling bar, then "Upload complete - finishing up...". Up to 3 files upload at once; a file that fails part-way is retried automatically a few times before giving up. If they try to close the tab mid-upload, the browser asks them to confirm.
+
+## Desktop Page Counter (for your own use)
+
+`Page Counter.zip` is a separate download: the same page counting and size checks, running entirely on your own computer. Nothing is uploaded and there's no size limit. Unzip it somewhere permanent (e.g. Documents), double-click **Page Counter.command** (Mac) or **Page Counter.bat** (Windows), and it opens in your browser. The first run takes a minute or two to set itself up. Full instructions are in its "READ ME FIRST.txt". Its source files are `desktop_app.py`, `templates/desktop.html` and the `desktop/` folder in this project, and it reuses `analyzer.py`, `paper_sizes.py` and `report.py`, so size rules stay identical to the website.
 
 ## Project files
 
 ```
 app.py          - Flask web server: both upload routes, storage, cleanup, kicks off analysis+email
-gdrive_upload.py - Google Drive bypass for large files (see "Large files: Google Drive bypass")
+r2_storage.py   - Cloudflare R2 storage for large uploads (see "Large files: Cloudflare R2")
 analyzer.py     - the core file-analysis logic (PDF/JPG/PPTX/XLSX/ZIP)
 paper_sizes.py  - reference tables of standard page/slide sizes + matching logic
 report.py       - builds the HTML email body and CSV attachment from analysis results
@@ -304,7 +302,8 @@ file_transfer.py     - picks WeTransfer or TransferNow for uploading originals, 
 wetransfer_upload.py - WeTransfer provider (for your paid account, once reachable)
 transfernow_upload.py - TransferNow provider (works now, free 14-day trial then pay-as-you-go)
 templates/index.html - the client-facing drag & drop page
-templates/gdrive_success.html - one-time page shown after authorizing Google Drive, displaying the refresh token to copy
+templates/admin_*.html - admin pages: login, uploads needing attention, file downloads
+desktop_app.py, templates/desktop.html, desktop/ - the desktop Page Counter
 make_samples.py - generates the test files used to validate the analyzer (samples/)
 samples/        - sample test files (mixed standard + unusual sizes)
 uploads/        - where submitted files land (auto-deleted after 30 days)
@@ -316,7 +315,7 @@ render.yaml     - one-click deployment config for Render.com (see "Going live" b
 ## Adjusting things later
 
 - **Retention period**: change `RETENTION_DAYS` in `app.py`.
-- **Upload size cap**: change `MAX_CONTENT_LENGTH` in `app.py` (currently 5GB) and `MAX_TOTAL_BYTES` in `templates/index.html` to match. This is this app's own cap - it's separate from (and smaller than) the Cloudflare edge limit that large uploads actually run into; see "Large files: Google Drive bypass" above for what actually makes big uploads work reliably.
+- **Upload size cap**: change `MAX_CONTENT_LENGTH` in `app.py` (currently 5GB) and `MAX_TOTAL_BYTES` in `templates/index.html` to match. This is this app's own cap - it's separate from (and smaller than) the Cloudflare edge limit that large uploads actually run into; see "Large files: Cloudflare R2" above for what actually makes big uploads work reliably.
 - **Size tolerance** (how close to A4 counts as "A4"): change `TOLERANCE_MM` in `paper_sizes.py`.
 - **Notable sizes** (roller banners, squares, Legal->A4 grouping): `ROLLER_BANNER_BANDS`, `SQUARE_SIZES`, `LABEL_ALIASES` in `paper_sizes.py`.
 - **Required form fields**: `REQUIRED_FIELDS_ALWAYS` / `REQUIRED_FIELDS_FULL_SUBMISSION` in `app.py`, and the matching inputs in `templates/index.html`.

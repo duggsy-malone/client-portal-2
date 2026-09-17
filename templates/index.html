@@ -428,9 +428,9 @@ function postJSON(url, body, timeoutMs) {
   });
 }
 
-// Sends one file's raw bytes straight to its Google Drive upload URL - this
-// goes directly to Google, not through this site, so it isn't subject to
-// whatever upload size limit our own host might otherwise impose.
+// Sends one file's raw bytes straight to its storage upload link. This goes
+// directly to Cloudflare R2, not through this site, so the size limit in
+// front of our own server doesn't apply.
 function putFileToUrl(url, file, onProgress, activeXhrs) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -445,15 +445,41 @@ function putFileToUrl(url, file, onProgress, activeXhrs) {
     };
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) resolve();
-      else reject(new Error(`Uploading "${file.name}" failed (status ${xhr.status}). Please try again.`));
+      else {
+        const err = new Error(`Uploading "${file.name}" failed (status ${xhr.status}). Please try again.`);
+        err.retryable = xhr.status === 408 || xhr.status === 429 || xhr.status >= 500;
+        reject(err);
+      }
     };
-    xhr.onerror = () => reject(new Error(`Uploading "${file.name}" failed - please check your connection and try again.`));
+    xhr.onerror = () => {
+      const err = new Error(`Uploading "${file.name}" failed - please check your connection and try again.`);
+      err.retryable = true;
+      reject(err);
+    };
+    xhr.onabort = () => reject(new Error('Upload cancelled.'));
     xhr.send(file);
   });
 }
 
-// Fallback path: used automatically whenever the server reports Drive isn't
-// configured yet. One plain multipart POST, same as this app always used to do.
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// A brief network wobble on one file out of hundreds shouldn't sink the
+// whole upload, so each file gets a few tries before giving up.
+async function putFileWithRetries(url, file, onProgress, activeXhrs, isCancelled) {
+  const waits = [2000, 5000, 15000];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await putFileToUrl(url, file, onProgress, activeXhrs);
+    } catch (err) {
+      if (!err.retryable || attempt >= waits.length || isCancelled()) throw err;
+      onProgress(0);
+      await sleep(waits[attempt]);
+    }
+  }
+}
+
+// Fallback path: used automatically whenever the server reports storage
+// isn't configured. One plain multipart POST.
 function submitLegacy(isCountOnly) {
   const formData = new FormData();
   files.forEach(f => formData.append('files', f));
@@ -482,11 +508,53 @@ function submitLegacy(isCountOnly) {
   xhr.send(formData);
 }
 
-// Main path: files go straight from this browser to Google Drive (one PUT
-// per file, one after another), then the server is told to pick them up
-// from there - see /upload/init and /upload/finalize in app.py.
-async function submitViaDrive(initResp, isCountOnly) {
-  const { submission_id, reference_number, drive_folder_id, uploads } = initResp;
+function getJSON(url, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', url, true);
+    xhr.timeout = timeoutMs || 30000;
+    xhr.onload = () => {
+      let parsed = {};
+      try { parsed = JSON.parse(xhr.responseText); } catch (e) {}
+      if (xhr.status === 200) resolve(parsed);
+      else reject(new Error(parsed.error || 'Something went wrong. Please try again.'));
+    };
+    xhr.onerror = () => reject(new Error('network'));
+    xhr.ontimeout = () => reject(new Error('network'));
+    xhr.send();
+  });
+}
+
+// "Count my pages" on the storage route: the server fetches and counts in
+// the background, and this checks back every couple of seconds.
+async function waitForCount(initResp) {
+  const { submission_id, reference_number, token } = initResp;
+  const url = `/upload/status?submission_id=${encodeURIComponent(submission_id)}` +
+              `&reference_number=${encodeURIComponent(reference_number)}&token=${encodeURIComponent(token)}`;
+  const giveUpAt = Date.now() + 60 * 60 * 1000;
+  let networkMisses = 0;
+  while (Date.now() < giveUpAt) {
+    await sleep(2000);
+    let job;
+    try {
+      job = await getJSON(url);
+      networkMisses = 0;
+    } catch (err) {
+      if (err.message !== 'network' || ++networkMisses > 15) throw err;
+      continue;  // brief connection blip - keep checking
+    }
+    if (job.state === 'done') return { report_html: job.report_html, reference_number };
+    if (job.state === 'error') throw new Error(job.error || 'Something went wrong counting your pages.');
+    setStage(job.stage || 'Counting your pages...', null);
+  }
+  throw new Error('Counting your pages is taking too long - please try again with fewer files.');
+}
+
+// Main path: files go straight from this browser to Cloudflare R2 (up to 3
+// at a time), then the server is told they're all there - see /upload/init
+// and /upload/finalize in app.py.
+async function submitViaRelay(initResp, isCountOnly) {
+  const { submission_id, reference_number, token, uploads } = initResp;
   if (!uploads || uploads.length !== files.length || uploads.some(u => !u.upload_url)) {
     throw new Error('Missing upload destination for one of the files - please try again.');
   }
@@ -502,16 +570,16 @@ async function submitViaDrive(initResp, isCountOnly) {
   };
   updateProgress();
 
-  // Upload up to 3 files at the same time. If one fails, stop the others.
+  // Upload up to 3 files at the same time. If one fails for good, stop the others.
   const activeXhrs = new Set();
-  let next = 0;
+  let next = 0, cancelled = false;
   const worker = async () => {
-    while (next < files.length) {
+    while (next < files.length && !cancelled) {
       const i = next++;
-      await putFileToUrl(uploads[i].upload_url, files[i], (loaded) => {
+      await putFileWithRetries(uploads[i].upload_url, files[i], (loaded) => {
         loadedByIndex[i] = loaded;
         updateProgress();
-      }, activeXhrs);
+      }, activeXhrs, () => cancelled);
       loadedByIndex[i] = files[i].size;
       doneCount++;
       updateProgress();
@@ -520,6 +588,7 @@ async function submitViaDrive(initResp, isCountOnly) {
   try {
     await Promise.all(Array.from({ length: Math.min(3, files.length) }, worker));
   } catch (err) {
+    cancelled = true;
     next = files.length;
     activeXhrs.forEach(x => x.abort());
     throw err;
@@ -527,12 +596,17 @@ async function submitViaDrive(initResp, isCountOnly) {
 
   setStage(isCountOnly ? 'Upload complete - counting your pages...' : 'Upload complete - finishing up...', null);
   const finalizeResp = await postJSON('/upload/finalize', {
-    submission_id, reference_number, drive_folder_id,
+    submission_id, reference_number, token,
     count_only: isCountOnly,
     client_note: document.getElementById('clientNote').value,
     contact: buildContactPayload(),
-  }, 15 * 60 * 1000);  // count-only has to download + analyse before replying
-  showSuccess(finalizeResp, isCountOnly);
+  }, 90 * 1000);
+
+  if (isCountOnly) {
+    showSuccess(await waitForCount(initResp), true);
+  } else {
+    showSuccess(finalizeResp, false);
+  }
 }
 
 submitBtn.addEventListener('click', async () => {
@@ -560,10 +634,10 @@ submitBtn.addEventListener('click', async () => {
       files: files.map(f => ({ name: f.name, size: f.size })),
     }, 90 * 1000);
 
-    if (initResp.drive_configured === false) {
+    if (initResp.relay_configured === false) {
       submitLegacy(isCountOnly);
     } else {
-      await submitViaDrive(initResp, isCountOnly);
+      await submitViaRelay(initResp, isCountOnly);
     }
   } catch (err) {
     showError(err.message || 'Something went wrong. Please try again.');

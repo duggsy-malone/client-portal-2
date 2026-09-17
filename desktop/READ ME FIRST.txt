@@ -1,0 +1,25 @@
+PAGE COUNTER - desktop version
+==============================
+
+Counts pages and checks page sizes for PDFs, images, PowerPoint, Excel and ZIPs,
+exactly like the website's "just count my pages" option - but on this computer.
+Nothing is uploaded anywhere, and there's no size limit.
+
+MAC
+1. Put this "Page Counter" folder somewhere permanent, e.g. Documents.
+2. Double-click "Page Counter.command".
+   - The first time, macOS may say it "can't be opened because it is from an
+     unidentified developer". If so: right-click (or Control-click) the file,
+     choose Open, then click Open again. You only need to do this once.
+   - The first run takes a minute or two to set up (needs internet).
+     After that it starts in a few seconds.
+3. Page Counter opens in your web browser. Drop in files or folders, press
+   Count pages, and the report opens in a new tab. "Save as spreadsheet" gives
+   you the same figures as a CSV for Excel.
+4. To stop it, close the Terminal window.
+
+If it says it needs Python 3: install it from https://www.python.org/downloads/
+then double-click Page Counter again.
+
+WINDOWS
+Same as above, but double-click "Page Counter.bat".

@@ -34,6 +34,34 @@ COUNTER_FILE = os.path.join(BASE_DIR, "submission_counter.txt")
 _lock = threading.Lock()
 
 
+REMOTE_KEY = "meta/reference-counter.txt"
+
+
+def _remote_value():
+    """The last number saved in R2, or 0. Used when this server's local copy
+    is missing - which happens after every redeploy, since Render gives a
+    fresh disk - so numbering carries on instead of restarting at 00001."""
+    try:
+        import r2_storage
+        if not r2_storage.is_configured():
+            return 0
+        data = r2_storage.get_bytes(REMOTE_KEY, attempts=2)
+        return int(data.decode().strip()) if data else 0
+    except Exception:
+        return 0
+
+
+def _save_remote(value):
+    def _save():
+        try:
+            import r2_storage
+            if r2_storage.is_configured():
+                r2_storage.put_bytes(REMOTE_KEY, str(value).encode(), "text/plain", attempts=3)
+        except Exception:
+            pass  # best effort - the local copy still works until the next redeploy
+    threading.Thread(target=_save, daemon=True).start()
+
+
 def next_reference_number():
     """Returns the next reference number as a string, e.g. "160926-00001"."""
     with _lock:
@@ -42,7 +70,7 @@ def next_reference_number():
             try:
                 f.seek(0)
                 content = f.read().strip()
-                current = int(content) if content else 0
+                current = int(content) if content else _remote_value()
                 next_value = current + 1
                 f.seek(0)
                 f.truncate()
@@ -51,6 +79,7 @@ def next_reference_number():
                 os.fsync(f.fileno())
             finally:
                 fcntl.flock(f, fcntl.LOCK_UN)
+    _save_remote(next_value)
 
     date_part = datetime.now().strftime("%d%m%y")
     num_part = str(next_value).zfill(5)

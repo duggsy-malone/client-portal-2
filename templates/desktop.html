@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Page Counter</title>
+<style>
+  :root { --brand: #2c3e50; --accent: #2980b9; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; background: #f4f6f8; margin: 0; color: #222; }
+  .wrap { max-width: 640px; margin: 40px auto; padding: 0 16px; }
+  h1 { color: var(--brand); font-size: 1.6rem; margin-bottom: 4px; }
+  p.lede { color: #555; margin-top: 0; }
+  .dropzone { border: 2px dashed #b0bec5; border-radius: 12px; background: #fff; padding: 44px 24px; text-align: center; cursor: pointer; }
+  .dropzone.dragover { border-color: var(--accent); background: #eaf3fa; }
+  .dropzone p { margin: 8px 0; color: #607d8b; }
+  .dropzone .icon { font-size: 40px; }
+  input[type=file] { display: none; }
+  .filelist { margin-top: 14px; max-height: 260px; overflow-y: auto; }
+  .fileitem { display: flex; justify-content: space-between; background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 8px 12px; margin-bottom: 6px; font-size: 13px; gap: 10px; }
+  .fileitem .remove { color: #c0392b; cursor: pointer; font-weight: bold; }
+  .summary { font-size: 13px; color: #555; margin-top: 6px; }
+  .row { display: flex; gap: 10px; margin-top: 16px; }
+  .row input { flex: 1; border-radius: 8px; border: 1px solid #ccc; padding: 11px; font-size: 14px; }
+  button { padding: 12px 16px; border: none; border-radius: 8px; background: var(--accent); color: #fff; font-size: 15px; cursor: pointer; }
+  button:disabled { background: #b0bec5; cursor: not-allowed; }
+  button.secondary { background: #fff; color: var(--accent); border: 1px solid var(--accent); }
+  .status { margin-top: 14px; font-size: 14px; }
+  .status.error { color: #c0392b; }
+  .status.success { background: #e8f8ef; border: 1px solid #b7e4c7; padding: 14px; border-radius: 8px; color: #1e6b3c; }
+  .actions { display: none; gap: 10px; margin-top: 10px; }
+  progress { width: 100%; height: 10px; margin-top: 12px; border: none; border-radius: 5px; -webkit-appearance: none; appearance: none; background: #e3e8ec; overflow: hidden; }
+  progress::-webkit-progress-bar { background: #e3e8ec; border-radius: 5px; }
+  progress::-webkit-progress-value { background: var(--accent); border-radius: 5px; }
+  progress::-moz-progress-bar { background: var(--accent); }
+  progress:indeterminate { background: linear-gradient(90deg, #e3e8ec 0%, #e3e8ec 30%, var(--accent) 50%, #e3e8ec 70%, #e3e8ec 100%); background-size: 250% 100%; animation: sweep 1.3s linear infinite; }
+  progress:indeterminate::-webkit-progress-bar { background: transparent; }
+  @keyframes sweep { from { background-position: 100% 0; } to { background-position: 0% 0; } }
+  .note { font-size: 12px; color: #90a4ae; margin-top: 22px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Page Counter</h1>
+  <p class="lede">Drop in files or folders to get a page count and size report. Everything stays on this computer.</p>
+
+  <div class="dropzone" id="dropzone">
+    <div class="icon">&#128193;</div>
+    <p><strong>Drag &amp; drop files or folders here</strong>, or click to browse</p>
+    <p style="font-size:13px"><a href="#" id="chooseFolder">Choose a whole folder instead</a></p>
+    <input type="file" id="fileInput" multiple>
+    <input type="file" id="folderInput" webkitdirectory directory multiple>
+  </div>
+  <div class="summary" id="summary"></div>
+  <div class="filelist" id="filelist"></div>
+
+  <div class="row">
+    <input type="text" id="jobName" placeholder="Job name for the report (optional)">
+    <button id="countBtn" disabled>Count pages</button>
+  </div>
+  <div class="row" style="margin-top:8px"><button class="secondary" id="clearBtn" type="button">Clear list</button></div>
+
+  <progress id="progressBar" value="0" max="100" style="display:none"></progress>
+  <div id="status" class="status"></div>
+  <div class="actions" id="actions">
+    <button id="openReport" type="button">Open report again</button>
+    <button class="secondary" id="saveCsv" type="button">Save as spreadsheet (CSV)</button>
+  </div>
+
+  <p class="note">To close Page Counter, close the Terminal (or Command Prompt) window it opened in.</p>
+</div>
+
+<script>
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const folderInput = document.getElementById('folderInput');
+const filelistEl = document.getElementById('filelist');
+const summaryEl = document.getElementById('summary');
+const countBtn = document.getElementById('countBtn');
+const statusEl = document.getElementById('status');
+const progressBar = document.getElementById('progressBar');
+const actionsEl = document.getElementById('actions');
+let files = [];
+let lastResult = null;
+
+const JUNK_NAMES = new Set(['.ds_store', 'thumbs.db', 'desktop.ini']);
+function isJunk(name) {
+  const lower = name.toLowerCase();
+  return lower.startsWith('.') || lower.startsWith('~$') || JUNK_NAMES.has(lower);
+}
+function withPathName(file, relativePath) {
+  if (!relativePath || relativePath === file.name) return file;
+  const flat = relativePath.split('/').filter(Boolean).join(' - ');
+  return new File([file], flat, { type: file.type, lastModified: file.lastModified });
+}
+function readAllEntries(dirReader) {
+  return new Promise((resolve, reject) => {
+    const all = [];
+    const readBatch = () => dirReader.readEntries(batch => {
+      if (!batch.length) return resolve(all);
+      all.push(...batch);
+      readBatch();
+    }, reject);
+    readBatch();
+  });
+}
+async function collectFromEntry(entry, path, out) {
+  if (isJunk(entry.name)) return;
+  if (entry.isFile) {
+    const file = await new Promise((res, rej) => entry.file(res, rej));
+    out.push(withPathName(file, path + entry.name));
+  } else if (entry.isDirectory) {
+    for (const child of await readAllEntries(entry.createReader())) {
+      await collectFromEntry(child, path + entry.name + '/', out);
+    }
+  }
+}
+function formatBytes(n) {
+  if (n >= 1024 ** 3) return (n / 1024 ** 3).toFixed(2) + ' GB';
+  if (n >= 1024 ** 2) return (n / 1024 ** 2).toFixed(1) + ' MB';
+  return Math.max(1, Math.round(n / 1024)) + ' KB';
+}
+function setStage(text, percent) {
+  progressBar.style.display = 'block';
+  if (percent === null) progressBar.removeAttribute('value'); else progressBar.value = percent;
+  statusEl.className = 'status';
+  statusEl.textContent = text;
+}
+
+function addFiles(list) {
+  for (const f of list) {
+    if (!files.some(x => x.name === f.name && x.size === f.size && x.lastModified === f.lastModified)) files.push(f);
+  }
+  render();
+}
+function render() {
+  filelistEl.innerHTML = '';
+  files.forEach((f, idx) => {
+    const div = document.createElement('div');
+    div.className = 'fileitem';
+    const label = document.createElement('span');
+    label.textContent = `${f.name} (${formatBytes(f.size)})`;
+    const remove = document.createElement('span');
+    remove.className = 'remove';
+    remove.innerHTML = '&#10005;';
+    remove.addEventListener('click', () => { files.splice(idx, 1); render(); });
+    div.append(label, remove);
+    filelistEl.appendChild(div);
+  });
+  const total = files.reduce((s, f) => s + f.size, 0);
+  summaryEl.textContent = files.length ? `${files.length} file(s), ${formatBytes(total)}` : '';
+  countBtn.disabled = files.length === 0;
+}
+
+dropzone.addEventListener('click', () => fileInput.click());
+document.getElementById('chooseFolder').addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); folderInput.click(); });
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+dropzone.addEventListener('drop', async e => {
+  e.preventDefault();
+  dropzone.classList.remove('dragover');
+  const entries = Array.from(e.dataTransfer.items || []).map(i => i.webkitGetAsEntry ? i.webkitGetAsEntry() : null).filter(Boolean);
+  if (!entries.length) { addFiles(e.dataTransfer.files); return; }
+  statusEl.className = 'status'; statusEl.textContent = 'Reading...';
+  const collected = [];
+  try { for (const entry of entries) await collectFromEntry(entry, '', collected); }
+  catch (err) { statusEl.className = 'status error'; statusEl.textContent = "Couldn't read everything that was dropped."; }
+  statusEl.textContent = '';
+  addFiles(collected);
+});
+fileInput.addEventListener('change', e => { addFiles(e.target.files); fileInput.value = ''; });
+folderInput.addEventListener('change', e => {
+  addFiles(Array.from(e.target.files)
+    .filter(f => !(f.webkitRelativePath || f.name).split('/').some(isJunk))
+    .map(f => withPathName(f, f.webkitRelativePath)));
+  folderInput.value = '';
+});
+document.getElementById('clearBtn').addEventListener('click', () => {
+  files = []; render(); statusEl.textContent = ''; progressBar.style.display = 'none'; actionsEl.style.display = 'none';
+});
+
+function openReport(html) {
+  const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+  if (!window.open(url, '_blank')) {
+    statusEl.className = 'status error';
+    statusEl.textContent = 'The report is ready but the pop-up was blocked - click "Open report again".';
+  }
+}
+document.getElementById('openReport').addEventListener('click', () => lastResult && openReport(lastResult.report_html));
+document.getElementById('saveCsv').addEventListener('click', () => {
+  if (!lastResult) return;
+  const a = document.createElement('a');
+  const name = (document.getElementById('jobName').value.trim() || 'page-count').replace(/[\\/:*?"<>|]/g, '-');
+  a.href = URL.createObjectURL(new Blob([lastResult.csv], { type: 'text/csv' }));
+  a.download = `${name}.csv`;
+  a.click();
+});
+
+countBtn.addEventListener('click', () => {
+  if (!files.length) return;
+  countBtn.disabled = true;
+  actionsEl.style.display = 'none';
+  const form = new FormData();
+  files.forEach(f => form.append('files', f));
+  form.append('job_name', document.getElementById('jobName').value);
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/count', true);
+  xhr.upload.onprogress = e => {
+    if (e.lengthComputable) setStage(`Reading files - ${formatBytes(e.loaded)} of ${formatBytes(e.total)}`, (e.loaded / e.total) * 100);
+  };
+  xhr.upload.onload = () => setStage('Counting pages...', null);
+  xhr.onload = () => {
+    progressBar.style.display = 'none';
+    countBtn.disabled = false;
+    let parsed = {};
+    try { parsed = JSON.parse(xhr.responseText); } catch (e) {}
+    if (xhr.status !== 200) {
+      statusEl.className = 'status error';
+      statusEl.textContent = parsed.error || 'Something went wrong.';
+      return;
+    }
+    lastResult = parsed;
+    statusEl.className = 'status success';
+    statusEl.textContent = `Done - ${parsed.files} file(s), ${parsed.items} page/item row(s). The report has opened in a new tab.`;
+    actionsEl.style.display = 'flex';
+    openReport(parsed.report_html);
+  };
+  xhr.onerror = () => {
+    progressBar.style.display = 'none';
+    countBtn.disabled = false;
+    statusEl.className = 'status error';
+    statusEl.textContent = "Couldn't reach Page Counter - is its Terminal window still open?";
+  };
+  setStage('Reading files...', 0);
+  xhr.send(form);
+});
+</script>
+</body>
+</html>

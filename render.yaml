@@ -50,25 +50,21 @@ services:
         sync: false
       - key: TRANSFERNOW_API_KEY
         sync: false
-      # Large-file bypass: Render sits behind a Cloudflare edge with its own
-      # hard upload size limit, unrelated to anything in this app. When these
-      # three are set, big files go straight from the client's browser to
-      # Google Drive instead (past that limit entirely), and the app pulls
-      # them back down just to analyse them. Until they're set, uploads fall
-      # back automatically to the old direct-to-this-app path (fine for
-      # smaller files, but still subject to that edge limit for big ones).
-      # See README.md "Large files: Google Drive bypass" for the one-time
-      # setup - GOOGLE_REFRESH_TOKEN specifically comes from visiting
-      # /admin/gdrive-auth?key=<GDRIVE_ADMIN_KEY> on the deployed app, once,
-      # after the other three are set.
-      - key: GOOGLE_CLIENT_ID
+      # Large uploads: Render sits behind a Cloudflare edge that rejects big
+      # uploads before they reach this app. With these four set, clients'
+      # browsers send files straight to Cloudflare R2 storage instead, and the
+      # app pulls them down to analyse. Until they're set, uploads use the
+      # direct route (fine for smaller files). See README "Large files:
+      # Cloudflare R2" for the ~15 minute setup.
+      - key: R2_ACCOUNT_ID
         sync: false
-      - key: GOOGLE_CLIENT_SECRET
+      - key: R2_ACCESS_KEY_ID
         sync: false
-      - key: GOOGLE_REFRESH_TOKEN
+      - key: R2_SECRET_ACCESS_KEY
         sync: false
-      # A password of your choosing that protects /admin/gdrive-auth from
-      # random internet traffic - make this up yourself (any random string),
-      # it doesn't come from Google.
-      - key: GDRIVE_ADMIN_KEY
+      - key: R2_BUCKET
+        value: portal-uploads
+      # Password for /admin/attention and /admin/storage-check (make it up).
+      # An existing GDRIVE_ADMIN_KEY value also still works.
+      - key: ADMIN_KEY
         sync: false

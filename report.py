@@ -79,7 +79,7 @@ def rows_to_csv(rows):
 
 
 def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetransfer_error=None,
-                  contact=None, count_only=False, reference_number=None):
+                  contact=None, count_only=False, reference_number=None, title=None, banner=None):
     flagged_count = sum(1 for r in rows if r.flagged)
     files = sorted(set(r.source_file for r in rows))
     summary = build_size_summary(rows)
@@ -158,6 +158,11 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
             'border-radius:8px;color:#1c5a80">This is a self-service page count only &ndash; '
             'nothing has been sent to us, and your files were deleted as soon as they\'d been counted.</p>'
         )
+    if banner:
+        count_only_banner = (
+            '<p style="background:#eaf3fa;border:1px solid #b8d9ec;padding:10px 14px;'
+            f'border-radius:8px;color:#1c5a80">{_e(banner)}</p>'
+        )
 
     if wetransfer_link:
         files_link_html = (
@@ -177,6 +182,8 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
 
     display_ref = reference_number or submission_id
     heading = f"Page count summary - ref {display_ref}" if count_only else f"New quote request - ref {display_ref}"
+    if title:
+        heading = _e(title)
 
     html = f"""<html><head>{style}</head><body>
     <h2>{heading}</h2>
