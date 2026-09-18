@@ -78,7 +78,7 @@
       </div>
       <div class="meta">{{ s.kind }} &middot; {{ s.date }}{% if s.subject %} &middot; {{ s.subject }}{% endif %}</div>
       {% if s.file_count is not none %}
-      <div class="meta">{{ s.file_count }} file{{ '' if s.file_count == 1 else 's' }}{% if s.total_items is not none %}, {{ "{:,}".format(s.total_items) }} page{{ '' if s.total_items == 1 else 's' }} / items{% endif %}{% if s.sheets is not none %}, about {{ "{:,}".format(s.sheets) }} sheets of paper{% endif %}</div>
+      <div class="meta">{{ s.file_count }} file{{ '' if s.file_count == 1 else 's' }}{% if s.total_items is not none %}, {{ "{:,}".format(s.total_items) }} page{{ '' if s.total_items == 1 else 's' }} / items{% endif %}{% if s.sheets is not none %}, about {{ "{:,}".format(s.sheets) }} sheets of paper{% endif %}{% if s.folders_needed %}, {{ s.folders_needed }} folder{{ '' if s.folders_needed == 1 else 's' }}{% endif %}</div>
       {% if s.tabs is not none %}<div class="meta">{{ s.tabs }} tab{{ '' if s.tabs == 1 else 's' }} &middot; {{ s.dividers }} divider{{ '' if s.dividers == 1 else 's' }}</div>{% endif %}
       {% endif %}
       {% if s.plans %}<div class="meta"><b>{{ s.plans }}</b></div>{% endif %}

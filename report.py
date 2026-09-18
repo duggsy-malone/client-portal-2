@@ -63,7 +63,11 @@ def build_size_summary(rows):
 # Sizes a printer would normally run double-sided. Everything larger (A3 and
 # up, drawings, banners) is assumed single-sided.
 DOUBLE_SIDED_SIZES = {"A4", "A5", "A6", "US Letter"}
-SHEETS_EXPLANATION = "A4, A5, A6 & US Letter printed double-sided, larger sizes single-sided"
+SHEETS_EXPLANATION = "A4 and smaller (US Letter counts as A4) printed double-sided, larger sizes single-sided"
+
+# One ring binder holds this many sheets of paper, printed on both sides.
+SHEETS_PER_FOLDER = 380
+FOLDERS_EXPLANATION = f"{SHEETS_PER_FOLDER} sheets per folder"
 
 
 def estimate_sheets(rows):
@@ -89,6 +93,7 @@ def job_totals(rows, folder_info=None, documents=None):
     return {
         "pages": len(rows),
         "sheets": estimate_sheets(rows),
+        "folders_needed": -(-estimate_sheets(rows) // SHEETS_PER_FOLDER),  # rounded up
         "tabs": structure.count_tabs(documents),
         "dividers": len(documents),
         "files": len(set(r.source_file for r in rows)),
@@ -114,6 +119,7 @@ def rows_to_csv(rows, folder_info=None, plans_to_scale=None):
         writer.writerow(["Plans", plans_label(plans_to_scale)])
     writer.writerow(["Pages / items", totals["pages"]])
     writer.writerow(["Estimated sheets of paper", totals["sheets"], SHEETS_EXPLANATION])
+    writer.writerow(["Folders needed", totals["folders_needed"], FOLDERS_EXPLANATION])
     writer.writerow(["Tabs (one per folder)", totals["tabs"]])
     writer.writerow(["Dividers (one per document)", totals["dividers"]])
     writer.writerow(["Files uploaded", totals["files"]])
@@ -214,13 +220,67 @@ def _tree_html(node, interactive):
     return f'<ul style="{style}">' + "".join(items) + "</ul>"
 
 
-def _section(title, body, collapsible, open_=True):
-    if not body:
+# Long section titles for the email, where everything is shown one after
+# the other rather than as tabs.
+_EMAIL_TITLES = {
+    "Quantity by size": "Quantity by size (all files combined)",
+    "Folder structure": "Folder structure",
+    "Full breakdown": "Full breakdown - every page / slide / sheet / image",
+}
+
+
+def _sections(sections, tabbed):
+    """The report's main sections. In a browser (page-count reports and the
+    saved copies) they become tabs, so the page isn't one endless scroll; in
+    an email they're simply stacked, because email can't do tabs."""
+    sections = [(title, body) for title, body in sections if body]
+    if not sections:
         return ""
-    if collapsible:
-        return (f'<details class="section"{" open" if open_ else ""}><summary><h3>{title}</h3></summary>'
-                f'{body}</details>')
-    return f"<h3>{title}</h3>{body}"
+    if not tabbed:
+        return "".join(
+            f'<h3>{_EMAIL_TITLES.get(title, title)}'
+            f'{" - check these" if title.startswith("Spreadsheets") else ""}</h3>{body}'
+            for title, body in sections)
+    buttons = "".join(
+        f'<button type="button" class="tab-btn{" active" if i == 0 else ""}" data-panel="panel-{i}">'
+        f'{title}{" - check these" if title.startswith("Spreadsheets") else ""}</button>'
+        for i, (title, _) in enumerate(sections))
+    panels = "".join(
+        f'<div class="tab-panel{" active" if i == 0 else ""}" id="panel-{i}">{body}</div>'
+        for i, (_, body) in enumerate(sections))
+    return f'<div class="tabs">{buttons}</div><div class="tab-panels">{panels}</div>{_TAB_SCRIPT}'
+
+
+# Plain, old-fashioned JavaScript so it works in any browser a client might
+# have. Nothing is loaded from the internet - the report has to work as a
+# file saved on someone's computer.
+_TAB_SCRIPT = """
+    <script>
+      (function () {
+        var buttons = Array.prototype.slice.call(document.querySelectorAll('.tab-btn'));
+        var panels = Array.prototype.slice.call(document.querySelectorAll('.tab-panel'));
+        function show(id) {
+          var found = false;
+          buttons.forEach(function (b) {
+            var on = b.getAttribute('data-panel') === id;
+            b.className = on ? 'tab-btn active' : 'tab-btn';
+            if (on) { found = true; }
+          });
+          panels.forEach(function (p) {
+            p.className = (p.id === id) ? 'tab-panel active' : 'tab-panel';
+          });
+          if (found) { try { sessionStorage.setItem('portalReportTab', id); } catch (e) {} }
+          return found;
+        }
+        buttons.forEach(function (b) {
+          b.addEventListener('click', function () { show(b.getAttribute('data-panel')); });
+        });
+        var saved = null;
+        try { saved = sessionStorage.getItem('portalReportTab'); } catch (e) {}
+        if (saved) { show(saved); }
+      })();
+    </script>
+    """
 
 
 def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetransfer_error=None,
@@ -247,12 +307,18 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
       .badge { display:inline-block; background:#c0392b; color:#fff; padding:2px 8px; border-radius:10px; font-size:12px; }
       h3 { color: #2c3e50; margin-top: 0; }
       .qty { font-weight: bold; text-align: right; }
-      details.section { margin: 0 0 18px; border-top: 1px solid #e0e0e0; padding-top: 12px; }
-      details.section > summary { cursor: pointer; list-style: none; }
-      details.section > summary::-webkit-details-marker { display: none; }
-      details.section > summary h3 { display: inline-block; margin: 0 0 12px; }
-      details.section > summary h3::before { content: "\\25B8  "; color: #90a4ae; }
-      details.section[open] > summary h3::before { content: "\\25BE  "; }
+      .tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 2px solid #2c3e50; margin: 18px 0 0; }
+      .tab-btn {
+        font: inherit; font-size: 14px; padding: 9px 16px; cursor: pointer; color: #2c3e50;
+        background: #eceff1; border: 1px solid #cfd8dc; border-bottom: none;
+        border-radius: 8px 8px 0 0; margin-bottom: -2px;
+      }
+      .tab-btn:hover { background: #e0e6e9; }
+      .tab-btn.active { background: #2c3e50; color: #fff; border-color: #2c3e50; font-weight: bold; }
+      .tab-panels { border: 1px solid #cfd8dc; border-top: none; border-radius: 0 0 8px 8px; padding: 16px; }
+      .tab-panel { display: none; }
+      .tab-panel.active { display: block; max-height: 74vh; overflow: auto; }
+      .tab-panel > table { margin-bottom: 0; }
       .tree summary::-webkit-details-marker { color: #90a4ae; }
     </style>
     """
@@ -364,6 +430,7 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
         '<table style="width:auto;margin:8px 0 14px"><tr>'
         + stat("Pages / items", totals["pages"])
         + stat("Sheets of paper", totals["sheets"], "estimate")
+        + stat("Folders", totals["folders_needed"], FOLDERS_EXPLANATION)
         + stat("Tabs", totals["tabs"], "one per folder")
         + stat("Dividers", totals["dividers"], "one per document")
         + stat("Files", totals["files"])
@@ -428,10 +495,10 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
       {files_link_html}
     </div>
 
-    {_section(f"Spreadsheets ({len(spreadsheets)}) - check these", spreadsheet_body, collapsible)}
-    {_section("Quantity by size (all files combined)", sizes_body, collapsible)}
-    {_section("Folders", tree_body, collapsible)}
-    {_section("Full breakdown - every page / slide / sheet / image", breakdown_body, collapsible, open_=False)}
+    {_sections([(f"Spreadsheets ({len(spreadsheets)})", spreadsheet_body),
+                ("Quantity by size", sizes_body),
+                ("Folder structure", tree_body),
+                ("Full breakdown", breakdown_body)], collapsible)}
     <p style="margin-top:16px;font-size:12px;color:#777">
       Full-size estimates for images and unformatted spreadsheets are approximations - see the
       accompanying README for details.

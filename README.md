@@ -290,14 +290,16 @@ Before they can submit, the client has to tick "I've checked my file list and I 
 ## What's in the report
 
 - **Plans banner** (quote requests): "PLANS: PRINTED TO SCALE" or "PLANS: A3 FOLDED", from the tick box on the upload page. It's also on the end of the email subject ("- TO SCALE" / "- A3 FOLDED").
-- **Totals, together:** pages/items, estimated sheets of paper, **tabs** (one per folder, at every level, including the outer folder the client dragged in, and a ZIP counts as a folder), **dividers** (one per document: every file, and every file inside a ZIP), and files.
+- **Totals, together:** pages/items, estimated sheets of paper, **folders needed** (one folder holds 380 sheets printed double-sided - change `SHEETS_PER_FOLDER` in `report.py`), **tabs** (one per folder, at every level, including the outer folder the client dragged in, and a ZIP counts as a folder), **dividers** (one per document: every file, and every file inside a ZIP), and files.
 - **Spreadsheets - check these:** every Excel file with its folder, worksheets, estimated pages, sizes, and whether the print size is set in the file or estimated.
 - **Quantity by size**, with non-standard sizes broken down.
-- **Folders:** a diagram of the folder structure with documents and pages in each folder (including subfolders). In the page-count report each folder has a "show files" toggle; the email shows folders only.
+- **Folder structure:** a diagram of the folders with documents and pages in each folder (including subfolders). In the page-count report each folder has a "show files" toggle; the email shows folders only.
 - **Full breakdown** of every page.
-- In the **page-count report** (opens in the browser) each section can be folded away; the full breakdown starts folded. Emails can't fold, so the quote email shows everything.
+- In a **browser** (the page-count report, and the saved copies on the admin and My submissions pages) the sections above are **tabs**, so the page isn't one endless scroll; the heading, client details and totals stay above them, and the tab you picked is remembered while the tab stays open. Emails can't do tabs, so the quote email shows every section stacked.
 - The CSV has the same totals, spreadsheet and folder sections.
 - Folder details come from the upload page, which sends each file's real folder path. Reports from before this change can't be recounted for tabs.
+- **ZIP files are refused**, on the upload page and again on the server: a large ZIP can't be unpacked safely here, and an unzipped folder gives a proper page count plus tabs and dividers. The message asks the client to unzip and drag the folder in.
+- **US Letter counts as A4** in the size totals (like US Legal). The true measurements are still in the full breakdown.
 - **Spreadsheet sizes:** only cells with something in them count towards a sheet's estimated size (formatting on empty cells is ignored). A sheet that still comes out bigger than 2.5 m on a side is listed as "check manually" instead of given a size.
 
 ## Submission history ("My submissions") and the admin list

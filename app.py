@@ -119,10 +119,18 @@ def _validate_contact(contact, count_only):
 
 
 def _validate_file_names(names):
-    """Any file type is accepted. Types the analyser can't count pages for
-    still go to Kaye in the download link, marked 'check manually'."""
+    """Any file type is accepted except ZIPs. Types the analyser can't count
+    pages for still go to Kaye in the download link, marked 'check manually'.
+
+    ZIPs are refused because a big one can't be unpacked safely here, and
+    unpacked folders give a proper page count plus tabs and dividers."""
     if not names or not any((n or "").strip() for n in names):
         return "No files received."
+    zipped = [os.path.basename(n or "") for n in names if (n or "").lower().strip().endswith(".zip")]
+    if zipped:
+        return ("ZIP files can't be counted: " + ", ".join(zipped[:3])
+                + ("..." if len(zipped) > 3 else "")
+                + ". Please unzip, then drag the folder itself onto the page.")
     return None
 
 
@@ -436,7 +444,8 @@ def _save_status(status):
 
 HISTORY_FIELDS = ("submission_id", "reference_number", "contact", "client_note", "created_at", "updated_at",
                   "status", "stage", "error", "file_count", "total_items", "flagged", "sizes",
-                  "transfer_link", "has_report", "plans_to_scale", "sheets", "tabs", "dividers")
+                  "transfer_link", "has_report", "plans_to_scale", "sheets", "tabs", "dividers",
+                  "folders_needed")
 
 
 def _record_from_status(status):
@@ -567,7 +576,8 @@ def _run_count_job(submission_id, reference_number, contact, client_note, folder
         _write_job(submission_id, state="done", stage="Done")
         logger.info(f"Count-only {submission_id} (ref {reference_number}): report ready.")
         totals = job_totals(rows, folder_info)
-        record.update(sheets=totals["sheets"], tabs=totals["tabs"], dividers=totals["dividers"])
+        record.update(sheets=totals["sheets"], tabs=totals["tabs"], dividers=totals["dividers"],
+                      folders_needed=totals["folders_needed"])
         record.update(status="done", file_count=len(saved), total_items=len(rows),
                       flagged=sum(1 for r in rows if r.flagged),
                       sizes=history.sizes_for_record(build_size_summary(rows)),
@@ -614,7 +624,7 @@ def _run_quote_job(submission_id):
         for field, empty in (("stage", ""), ("file_count", None), ("total_items", None), ("flagged", None),
                              ("sizes", []), ("transfer_link", ""), ("has_report", False),
                              ("plans_to_scale", None), ("folders", []), ("sheets", None), ("tabs", None),
-                             ("dividers", None)):
+                             ("dividers", None), ("folders_needed", None)):
             status.setdefault(field, empty)
         status["stage"] = "Starting"
         _save_status(status)
@@ -651,6 +661,7 @@ def _run_quote_job(submission_id):
                 folder_info=folder_info, plans_to_scale=status.get("plans_to_scale"))
             totals = job_totals(rows, folder_info)
             status["sheets"] = totals["sheets"]
+            status["folders_needed"] = totals["folders_needed"]
             status["tabs"] = totals["tabs"]
             status["dividers"] = totals["dividers"]
             status["file_count"] = len(saved_paths)
@@ -1074,6 +1085,7 @@ def _client_view(record, link_params):
         "file_count": record.get("file_count"),
         "total_items": record.get("total_items"),
         "sheets": record.get("sheets"),
+        "folders_needed": record.get("folders_needed"),
         "tabs": record.get("tabs"),
         "dividers": record.get("dividers"),
         "plans": {True: "Plans printed to scale", False: "Plans printed at A3 and folded"}.get(record.get("plans_to_scale"), ""),

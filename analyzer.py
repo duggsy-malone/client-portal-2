@@ -321,7 +321,10 @@ def analyze_xlsx(path, source_file, location=""):
                         code_int = None
                     declared = EXCEL_PAPER_SIZE_CODES.get(code_int)
                     if declared:
-                        std_w, std_h = STANDARD_PAGE_SIZES.get(declared.split(" ")[0], (None, None))
+                        # "US Letter" is one key, not "US" - look the whole
+                        # label up first, then the first word (e.g. "A2 (rotated)").
+                        std_w, std_h = (STANDARD_PAGE_SIZES.get(declared)
+                                        or STANDARD_PAGE_SIZES.get(declared.split(" ")[0], (None, None)))
                         rows.append(Row(
                             source_file, location, "Excel", f"Sheet '{title}' (declared print setup)",
                             width_mm=std_w, height_mm=std_h,

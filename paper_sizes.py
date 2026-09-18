@@ -76,6 +76,7 @@ SQUARE_SIZES = {
 # and used for grouping changes (e.g. a US Legal page is reported as "A4").
 LABEL_ALIASES = {
     "US Legal": "A4",
+    "US Letter": "A4",
 }
 
 

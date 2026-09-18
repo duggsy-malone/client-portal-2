@@ -71,7 +71,7 @@
       <td>{{ r.contact.subject }}{% if r.contact.deadline %}<br><span class="small">Deadline {{ r.contact.deadline }}</span>{% endif %}
           {% if r.plans_to_scale is true %}<br><span class="plans scale">TO SCALE</span>{% elif r.plans_to_scale is false %}<br><span class="plans a3">A3 FOLDED</span>{% endif %}</td>
       <td class="num">{{ r.file_count if r.file_count is not none else '' }}</td>
-      <td class="num">{{ "{:,}".format(r.total_items) if r.total_items is not none else '' }}{% if r.sheets is not none %}<br><span class="small">{{ "{:,}".format(r.sheets) }} sheets</span>{% endif %}{% if r.flagged %}<br><span class="small">{{ r.flagged }} flagged</span>{% endif %}</td>
+      <td class="num">{{ "{:,}".format(r.total_items) if r.total_items is not none else '' }}{% if r.sheets is not none %}<br><span class="small">{{ "{:,}".format(r.sheets) }} sheets</span>{% endif %}{% if r.folders_needed %}<br><span class="small">{{ r.folders_needed }} folder{{ '' if r.folders_needed == 1 else 's' }}</span>{% endif %}{% if r.flagged %}<br><span class="small">{{ r.flagged }} flagged</span>{% endif %}</td>
       <td class="num">{% if r.tabs is not none %}{{ r.tabs }} / {{ r.dividers }}{% endif %}</td>
       <td><span class="badge {{ r.status }}">{{ r.status_label }}</span>
           {% if r.stage and r.status == 'processing' %}<br><span class="stage">{{ r.stage }}</span>{% endif %}</td>

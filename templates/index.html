@@ -118,13 +118,14 @@
 <div class="wrap">
   <p class="toplink"><a href="/my-submissions">My submissions</a></p>
   <h1>Send us your files for a quote</h1>
-  <p class="lede">Drop your PDF, JPG, ZIP, PowerPoint or Excel files below and we'll get back to you with a quote.</p>
+  <p class="lede">Drop your PDF, JPG, PowerPoint or Excel files below and we'll get back to you with a quote.
+    Got a ZIP? Please unzip it first and drag in the folder.</p>
 
   <div class="dropzone" id="dropzone">
     <div class="icon">&#128193;</div>
     <p><strong>Drag &amp; drop files or folders here</strong>, or click to browse</p>
     <p style="font-size:13px"><a href="#" id="chooseFolder">Choose a whole folder instead</a></p>
-    <p style="font-size:12px">Any file type &middot; up to 5GB total &middot; page counts for PDF, JPG, PNG, ZIP, PowerPoint &amp; Excel</p>
+    <p style="font-size:12px">Any file type except ZIP &middot; up to 5GB total &middot; page counts for PDF, JPG, PNG, PowerPoint &amp; Excel</p>
     <input type="file" id="fileInput" multiple>
     <input type="file" id="folderInput" webkitdirectory directory multiple>
   </div>
@@ -377,21 +378,27 @@ function fileWarning(f) {
   if (f.size === 0) {
     return "This file is empty (0 KB). It may not have finished saving or downloading - check it, then remove it and add it again.";
   }
-  if (/\.zip$/i.test(f.name) && f.size < 1024 * 1024) {
-    return `This ZIP is only ${formatBytes(f.size)}. If you expected it to be bigger, it may still have been ` +
-           "creating or downloading when you added it - wait until it's finished, then remove it and add it again.";
-  }
   return '';
 }
 
 function addFiles(fileListObj) {
   if (busy) return;  // the upload in progress is already using the list
-  for (const f of fileListObj) {
+  // ZIPs are refused: a large one can't be opened safely on the server, and
+  // the unzipped folder gives a proper count plus tabs and dividers.
+  const zips = Array.from(fileListObj).filter(f => /\.zip$/i.test(f.name));
+  const rest = Array.from(fileListObj).filter(f => !/\.zip$/i.test(f.name));
+  for (const f of rest) {
     // Ignore the exact same file being added twice.
     const dup = files.some(x => x.name === f.name && x.size === f.size && x.lastModified === f.lastModified);
     if (!dup) files.push(f);
   }
-  renderFileList();
+  renderFileList();  // clears the status line, so the ZIP message comes after it
+  if (zips.length) {
+    statusEl.className = 'status error';
+    statusEl.textContent = zips.length === 1
+      ? `\u201C${zips[0].name}\u201D is a ZIP file, so it can't be counted. Please unzip it and drag the folder in instead.`
+      : `${zips.length} ZIP files were left out, because ZIPs can't be counted. Please unzip them and drag the folders in instead.`;
+  }
 }
 
 function renderFileList() {
