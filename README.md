@@ -1,4 +1,4 @@
-# Client File Upload & Quoting Portal
+# Client File Upload & Quoting Portal - V2.0
 
 A drag-and-drop portal for clients to upload job files (PDF, JPG, ZIP, PPTX, XLSX).
 Every submission is analysed automatically in the background - page/slide/sheet
@@ -24,6 +24,8 @@ against the sample files in `samples/`). It is **not yet live on the internet**
 5. Submission folders (uploads + their reports) are automatically deleted after 30 days.
 
 ### Notable (recognised, non-flagged) sizes
+
+**Roll-out documents**: a strip 297mm on one side (A4/A3 height) whose other side is three or more A4 widths - 630, 840, 1050, 1260mm and so on. Labelled e.g. "Roll-out 297 x 630 mm" and treated as a recognised size. A single A4 (297 x 210) or A3 (297 x 420) is not a roll-out. Orientation doesn't matter; the tolerances and the minimum width are the `ROLL_OUT_*` settings in `paper_sizes.py`.
 
 On top of the standard page sizes, a few business-specific sizes are recognised by name rather than being flagged as "non-standard":
 
@@ -275,7 +277,10 @@ Because of the Cloudflare limit above, big uploads can't come straight to this a
 ### What happens to files
 
 - **Quote request:** the client sees "received" as soon as their upload finishes. In the background the app downloads the files, counts pages, creates the TransferNow link and emails you. The copy in R2 is deleted only once that link exists.
-- **Just count my pages:** the page checks back every couple of seconds ("Fetching your files (12 of 433)...", "Counting pages...") and shows the report when it's ready. The files are deleted from R2 straight after.
+- **Just count my pages:** files are fetched and counted **one at a time** - fetch, count, delete, next - so only one file is ever on the server's disk and memory has a chance to settle between files. The page checks back every couple of seconds ("Counting pages (12 of 49)...") and shows the report when it's ready; the files are deleted from R2 straight after. The job is also recorded in R2, so if the server restarts part-way it's picked up again (as soon as the waiting page checks in, or within about 15 minutes if the client closed the tab) instead of being lost. After three interruptions it stops and tells the client to send the files over for a quote instead.
+- **Page counts email you too:** a short notice with the client's contact details and the totals only - no file list and no download link, since nothing was sent to us. It's how you keep track of who's using the self-service count. The client still gets their full report.
+- **One very large file won't take the server down:** anything over 750MB is listed as "too large to open safely here - please check it manually" rather than opened (`ANALYSE_MAX_FILE_MB`).
+- **Memory is logged as it goes**, e.g. "counting 12 of 49 - Site Plan.pdf (180.4 MB), memory 220 MB", so if a job ever does run the server out of memory, the log names the file that did it.
 - **If something goes wrong** (TransferNow down, a download failing, the server restarting mid-job): the files are kept in R2 and flagged, and you get an email. Open **`https://client-portal-2.onrender.com/admin/attention`** (it asks for your admin password) to download the files, **Try processing again**, or **Delete from storage** once you're done.
 - **Interrupted jobs** (e.g. by a redeploy) are restarted automatically within about 3 hours; after 3 failed attempts they're flagged for attention instead.
 - **Abandoned uploads** (client closed the tab part-way) are deleted after 24 hours. Flagged jobs are never deleted automatically.
@@ -293,6 +298,7 @@ Before they can submit, the client has to tick "I've checked my file list and I 
 - **Totals, together:** pages/items, estimated sheets of paper, **folders needed** (one folder holds 380 sheets printed double-sided - change `SHEETS_PER_FOLDER` in `report.py`), **tabs** (one per folder, at every level, including the outer folder the client dragged in, and a ZIP counts as a folder), **dividers** (one per document: every file, and every file inside a ZIP), and files.
 - **Spreadsheets - check these:** every Excel file with its folder, worksheets, estimated pages, sizes, and whether the print size is set in the file or estimated.
 - **Quantity by size**, with non-standard sizes broken down.
+- **Suggested scaling**, in its own section and deliberately not counted into the totals, so it can be checked: each odd size, how many there are, and what would fit it - "Scale up to A4" (smaller than A4), "Scale up to A3" (bigger than A4, within A3), "Scale down to A3" (bigger than A3), or "Too small to scale - check manually" for anything under 100mm on its long side (`MIN_SCALE_LONG_MM` in `paper_sizes.py`).
 - **Folder structure:** a diagram of the folders with documents and pages in each folder (including subfolders). In the page-count report each folder has a "show files" toggle; the email shows folders only.
 - **Full breakdown** of every page.
 - In a **browser** (the page-count report, and the saved copies on the admin and My submissions pages) the sections above are **tabs**, so the page isn't one endless scroll; the heading, client details and totals stay above them, and the tab you picked is remembered while the tab stays open. Emails can't do tabs, so the quote email shows every section stacked.
@@ -350,7 +356,8 @@ render.yaml     - one-click deployment config for Render.com (see "Going live" b
 
 - **Retention period**: change `RETENTION_DAYS` in `app.py`.
 - **Upload size cap**: change `MAX_CONTENT_LENGTH` in `app.py` (currently 5GB) and `MAX_TOTAL_BYTES` in `templates/index.html` to match. This is this app's own cap - it's separate from (and smaller than) the Cloudflare edge limit that large uploads actually run into; see "Large files: Cloudflare R2" above for what actually makes big uploads work reliably.
-- **Memory / Render plan**: files are read without loading them whole into memory (PDFs, PowerPoint and Excel are read piece by piece, and parts sent to TransferNow are streamed from disk). A rehearsal job of 406 files / 909 MB, including a 254 MB PDF, a 152 MB PowerPoint and a 150,000-row spreadsheet, peaked at 66 MB, so the 512 MB Starter plan is enough. (Before this, a single large spreadsheet could use 670 MB and crash the server.)
+- **Per-file limit**: `ANALYSE_MAX_FILE_MB` (default 750). A file bigger than this isn't opened at all - it's listed for a manual check. Worth raising only on an instance with more memory.
+- **Memory / Render plan**: files are read without loading them whole into memory (PDFs, PowerPoint and Excel are read piece by piece, and parts sent to TransferNow are streamed from disk). A rehearsal job of 406 files / 909 MB, including a 254 MB PDF, a 152 MB PowerPoint and a 150,000-row spreadsheet, peaked at 66 MB, so the 512 MB Starter plan is enough. (Before this, a single large spreadsheet could use 670 MB and crash the server.) A page-count rehearsal of 125 files / 655 MB, counted one file at a time, peaked at **57 MB** with at most one file (242 MB) on disk. Note that a real 4.9 GB job of large drawings did still run the 512 MB instance out of memory in September 2026, which is what the per-file limit and one-at-a-time counting are for; the 2 GB instance type gives jobs that size real headroom.
 - **Size tolerance** (how close to A4 counts as "A4"): change `TOLERANCE_MM` in `paper_sizes.py`.
 - **Notable sizes** (roller banners, squares, Legal->A4 grouping): `ROLLER_BANNER_BANDS`, `SQUARE_SIZES`, `LABEL_ALIASES` in `paper_sizes.py`.
 - **Required form fields**: `REQUIRED_FIELDS_ALWAYS` / `REQUIRED_FIELDS_FULL_SUBMISSION` in `app.py`, and the matching inputs in `templates/index.html`.

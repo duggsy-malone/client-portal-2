@@ -42,7 +42,7 @@
   {% for job in jobs %}
   <div class="job {{ job.status }}">
     <div class="top">
-      <span class="ref">Quote ref {{ job.reference_number }}</span>
+      <span class="ref">{{ 'Page count' if job.kind == 'count' else 'Quote' }} ref {{ job.reference_number }}</span>
       <span class="badge {{ job.status }}">{{ 'Needs attention' if job.status == 'needs_attention' else ('Finishing up' if job.status == 'sent' else 'Processing') }}</span>
     </div>
     <div class="meta">
@@ -66,6 +66,7 @@
     </div>
   </div>
   {% endfor %}
+  <p class="nav" style="text-align:left;color:#90a4ae;font-size:12px">Client portal V{{ version }}</p>
 </div>
 </body>
 </html>

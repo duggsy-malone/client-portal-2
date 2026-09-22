@@ -65,6 +65,31 @@ ROLLER_BANNER_BANDS = [
     ("2000 RB", (2000.0, 2200.0), (2000.0, 2200.0)),
 ]
 
+# "Roll-out" documents: a long strip the height of an A4/A3 page (297mm),
+# made of three or more A4 widths side by side - e.g. 297 x 630 (three A4),
+# 297 x 840 (four A4, or two A3). A single A4 (297 x 210) or A3 (297 x 420)
+# is NOT a roll-out. Orientation doesn't matter.
+ROLL_OUT_HEIGHT_MM = 297.0
+ROLL_OUT_HEIGHT_TOLERANCE_MM = 3.0
+ROLL_OUT_STEP_MM = 210.0            # one A4 width
+ROLL_OUT_STEP_TOLERANCE_MM = 5.0
+ROLL_OUT_MIN_STEPS = 3              # three A4 widths (630mm) and up
+
+
+def match_roll_out(width_mm: float, height_mm: float):
+    """Returns a label like "Roll-out 297 x 630 mm" if this is a roll-out
+    strip, else None."""
+    short, long_ = _normalise(width_mm, height_mm)
+    if abs(short - ROLL_OUT_HEIGHT_MM) > ROLL_OUT_HEIGHT_TOLERANCE_MM:
+        return None
+    steps = round(long_ / ROLL_OUT_STEP_MM)
+    if steps < ROLL_OUT_MIN_STEPS:
+        return None
+    if abs(long_ - steps * ROLL_OUT_STEP_MM) > ROLL_OUT_STEP_TOLERANCE_MM:
+        return None
+    return f"Roll-out {ROLL_OUT_HEIGHT_MM:.0f} \u00d7 {steps * ROLL_OUT_STEP_MM:.0f} mm"
+
+
 # Square formats recognised by name rather than falling through to "Non-standard".
 SQUARE_SIZES = {
     "210 square": (210.0, 210.0),
@@ -78,6 +103,31 @@ LABEL_ALIASES = {
     "US Legal": "A4",
     "US Letter": "A4",
 }
+
+
+# Suggested scaling for items that don't match a recognised size. Anything
+# shorter than this on its long side (small labels, stickers, cropped
+# artwork) isn't a scale-up candidate and is listed for a manual look.
+MIN_SCALE_LONG_MM = 100.0
+SCALE_TOO_SMALL = "Too small to scale - check manually"
+SCALE_UP_A4 = "Scale up to A4"
+SCALE_UP_A3 = "Scale up to A3"
+SCALE_DOWN_A3 = "Scale down to A3"
+
+
+def suggest_scale(width_mm: float, height_mm: float, tolerance: float = TOLERANCE_MM) -> str:
+    """What to do with an odd-sized item: bring it up to A4, up to A3, or
+    down to A3. Kept separate from the size totals so it can be checked."""
+    short, long_ = _normalise(abs(width_mm), abs(height_mm))
+    if long_ < MIN_SCALE_LONG_MM:
+        return SCALE_TOO_SMALL
+    a4_w, a4_h = STANDARD_PAGE_SIZES["A4"]
+    a3_w, a3_h = STANDARD_PAGE_SIZES["A3"]
+    if short <= a4_w + tolerance and long_ <= a4_h + tolerance:
+        return SCALE_UP_A4
+    if short <= a3_w + tolerance and long_ <= a3_h + tolerance:
+        return SCALE_UP_A3
+    return SCALE_DOWN_A3
 
 
 @dataclass
@@ -127,6 +177,10 @@ def match_page_size(width_mm: float, height_mm: float, tolerance: float = TOLERA
     rb_label = match_roller_banner(width_mm, height_mm)
     if rb_label:
         return SizeMatch(label=rb_label, is_standard=True, width_mm=width_mm, height_mm=height_mm)
+
+    roll_out = match_roll_out(width_mm, height_mm)
+    if roll_out:
+        return SizeMatch(label=roll_out, is_standard=True, width_mm=width_mm, height_mm=height_mm)
 
     combined_table = {**STANDARD_PAGE_SIZES, **SQUARE_SIZES}
     m = match_size(width_mm, height_mm, combined_table, tolerance)

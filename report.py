@@ -8,6 +8,8 @@ from collections import OrderedDict
 from datetime import datetime
 
 import structure
+from paper_sizes import suggest_scale
+from version import VERSION
 
 
 def _e(v):
@@ -107,6 +109,21 @@ def plans_label(plans_to_scale):
     return "PRINTED TO SCALE" if plans_to_scale else "A3 FOLDED (not to scale)"
 
 
+def build_scaling_suggestions(rows):
+    """One entry per odd size, with what to do about it:
+    [{size, qty, suggestion}], most common first. Deliberately separate from
+    the size totals so the suggestions can be checked on their own."""
+    counts = OrderedDict()
+    for r in rows:
+        if r.width_mm is None or r.height_mm is None or r.is_standard:
+            continue
+        key = tuple(sorted((int(round(abs(r.width_mm))), int(round(abs(r.height_mm))))))
+        counts[key] = counts.get(key, 0) + 1
+    entries = [{"size": f"{a} \u00d7 {b} mm", "qty": qty, "suggestion": suggest_scale(a, b)}
+               for (a, b), qty in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+    return entries
+
+
 def rows_to_csv(rows, folder_info=None, plans_to_scale=None):
     buf = io.StringIO()
     writer = csv.writer(buf)
@@ -134,6 +151,14 @@ def rows_to_csv(rows, folder_info=None, plans_to_scale=None):
             info = structure.describe_spreadsheet(d)
             writer.writerow([info["name"], info["folder"], info["worksheets"], info["pages"],
                              info["sizes"].replace("×", "x"), info["print_size"]])
+        writer.writerow([])
+
+    suggestions = build_scaling_suggestions(rows)
+    if suggestions:
+        writer.writerow([f"SUGGESTED SCALING ({len(suggestions)} odd size(s)) - separate from the totals above"])
+        writer.writerow(["Size", "Quantity", "Suggestion"])
+        for entry in suggestions:
+            writer.writerow([entry["size"].replace("\u00d7", "x"), entry["qty"], entry["suggestion"]])
         writer.writerow([])
 
     writer.writerow(["QUANTITY BY SIZE"])
@@ -224,6 +249,7 @@ def _tree_html(node, interactive):
 # the other rather than as tabs.
 _EMAIL_TITLES = {
     "Quantity by size": "Quantity by size (all files combined)",
+    "Suggested scaling": "Suggested scaling for odd sizes (not part of the totals)",
     "Folder structure": "Folder structure",
     "Full breakdown": "Full breakdown - every page / slide / sheet / image",
 }
@@ -456,6 +482,17 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
             '<table><tr><th>File</th><th>Folder</th><th>Worksheets</th><th>Est. pages</th>'
             f'<th>Sizes</th><th>Print size</th></tr>{sheet_rows}</table>')
 
+    suggestions = build_scaling_suggestions(rows)
+    scaling_body = ""
+    if suggestions:
+        scale_rows = "".join(
+            f'<tr><td>{_e(entry["size"])}</td><td class="qty">{entry["qty"]}</td>'
+            f'<td>{_e(entry["suggestion"])}</td></tr>' for entry in suggestions)
+        scaling_body = (
+            '<p style="font-size:12px;color:#777;margin:0 0 8px">Sizes that don\'t match a recognised '
+            'size, and what would fit them. Shown on its own, not counted into the totals above.</p>'
+            f'<table><tr><th>Size</th><th>Quantity</th><th>Suggestion</th></tr>{scale_rows}</table>')
+
     tree = structure.build_tree(documents)
     tree_body = ""
     if tree.children:
@@ -497,10 +534,11 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
 
     {_sections([(f"Spreadsheets ({len(spreadsheets)})", spreadsheet_body),
                 ("Quantity by size", sizes_body),
+                ("Suggested scaling", scaling_body),
                 ("Folder structure", tree_body),
                 ("Full breakdown", breakdown_body)], collapsible)}
     <p style="margin-top:16px;font-size:12px;color:#777">
-      Full-size estimates for images and unformatted spreadsheets are approximations - see the
+      Client portal V{VERSION}. Full-size estimates for images and unformatted spreadsheets are approximations - see the
       accompanying README for details.
       {"Files used for this page count were analysed and then deleted immediately - nothing was kept."
        if count_only else "The portal deletes its own copy of the original files once they've been passed on."}

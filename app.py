@@ -48,6 +48,7 @@ from reference_number import next_reference_number
 import r2_storage
 import history
 import structure
+from version import VERSION
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("portal")
@@ -64,10 +65,12 @@ RETENTION_DAYS = 30
 UPLOAD_LINK_HOURS = 24          # how long a client's upload links stay valid
 ABANDONED_AFTER_HOURS = 24      # unfinished uploads are deleted after this
 STALLED_AFTER_MINUTES = 120     # a job with no progress this long gets restarted
+COUNT_STALLED_AFTER_MINUTES = 15  # page counts are picked up again sooner - someone's waiting
 MAX_JOB_ATTEMPTS = 3
 HEARTBEAT_SECONDS = 600
 SWEEP_EVERY_SECONDS = 3600
 PROGRESS_SAVE_SECONDS = 30      # how often progress is written to the log/attention page
+
 SUBMISSION_ID_RE = r"\d{8}-\d{6}-[0-9a-f]{6}"
 
 # Password for the /admin pages. GDRIVE_ADMIN_KEY still works so the value
@@ -96,6 +99,20 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 # ==========================================================================
 # Small helpers
 # ==========================================================================
+
+def _rss_mb():
+    """How much memory this server process is using right now, in MB. Logged
+    while counting, so a job that runs the server out of memory can be traced
+    to the file that did it."""
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024
+    except OSError:
+        pass
+    return 0.0
+
 
 def _now_iso():
     return datetime.now(timezone.utc).isoformat()
@@ -249,12 +266,12 @@ def _start_background_jobs():
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", version=VERSION)
 
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok"})
+    return jsonify({"status": "ok", "version": VERSION})
 
 
 # ==========================================================================
@@ -372,9 +389,11 @@ def upload_finalize():
 
     portal_url = request.host_url.rstrip("/")
     if count_only:
+        status = _new_count_status(submission_id, reference_number, contact, client_note, folders, portal_url)
+        _save_status_safe(status)  # recorded in storage too, so a restart can pick it up
         _write_job(submission_id, state="processing", stage="Fetching your files...")
-        threading.Thread(target=_run_count_job,
-                         args=(submission_id, reference_number, contact, client_note, folders), daemon=True).start()
+        threading.Thread(target=_run_count_job, args=(submission_id,), kwargs={"status": status},
+                         daemon=True).start()
         return jsonify({"status": "processing", "submission_id": submission_id,
                         "reference_number": reference_number, "history": history.is_enabled()})
 
@@ -417,23 +436,45 @@ def upload_status():
     if not _check_token(submission_id, reference_number, request.args.get("token")):
         return jsonify({"state": "error", "error": "Invalid submission details - please start again."}), 400
     job = _read_job(submission_id)
-    if not job:
-        return jsonify({"state": "error",
-                        "error": "We lost track of this page count (the server may have restarted). Please try again."})
-    if job.get("state") == "done":
+    if job and job.get("state") == "done":
         report_path = os.path.join(JOBS_DIR, f"{submission_id}.html")
         try:
             with open(report_path) as f:
                 report_html = f.read()
         except OSError:
+            report_html = history.get_report(submission_id)
+        if not report_html:
             return jsonify({"state": "error", "error": "The report went missing - please try again."})
         return jsonify({"state": "done", "report_html": report_html, "reference_number": reference_number})
-    return jsonify({k: v for k, v in job.items() if k in ("state", "stage", "error")})
+    if job:
+        return jsonify({k: v for k, v in job.items() if k in ("state", "stage", "error")})
+
+    # Nothing on this server's disk: either the server restarted (the job is
+    # recorded in storage, so it can be picked up again), or it's long gone.
+    status = _resume_count_job(submission_id) if r2_storage.is_configured() else None
+    if not status:
+        return jsonify({"state": "error",
+                        "error": "We lost track of this page count (the server may have restarted). Please try again."})
+    if status.get("status") == "done":
+        report_html = history.get_report(submission_id)
+        if report_html:
+            return jsonify({"state": "done", "report_html": report_html, "reference_number": reference_number})
+        return jsonify({"state": "error", "error": "The report went missing - please try again."})
+    if status.get("status") == "failed":
+        return jsonify({"state": "error",
+                        "error": "We couldn't finish counting these files. Please try again, or send them "
+                                 "over for a quote and we'll count them for you."})
+    return jsonify({"state": "processing",
+                    "stage": "Picking up where we left off (the server restarted)..."})
 
 
 # --------------------------------------------------------------------------
 # Background work for the R2 route
 # --------------------------------------------------------------------------
+
+_running_jobs = set()
+_running_lock = threading.Lock()
+
 
 def _save_status(status):
     status["updated_at"] = _now_iso()
@@ -450,7 +491,7 @@ HISTORY_FIELDS = ("submission_id", "reference_number", "contact", "client_note",
 
 def _record_from_status(status):
     record = {k: status[k] for k in HISTORY_FIELDS if k in status}
-    record["kind"] = "quote"
+    record["kind"] = status.get("kind", "quote")
     return record
 
 
@@ -539,9 +580,31 @@ def _download_submission(submission_id, dest_dir, on_progress=None, indices_out=
     return dests
 
 
+def _save_status_safe(status):
+    """Saves the job's record, but never raises: losing the record is worth a
+    log line, not a failed job."""
+    try:
+        _save_status(status)
+        return True
+    except Exception as e:
+        logger.warning(f"Submission {status.get('submission_id')}: couldn't save job record - {e}")
+        return False
+
+
+def _key_index(key):
+    """The upload position from a stored file's name ("00007-plan.pdf" -> 7)."""
+    m = re.match(r"^(\d{5})-", key.rsplit("/", 1)[-1])
+    return int(m.group(1)) if m else -1
+
+
+def _original_name(key):
+    return re.sub(r"^\d{5}-", "", key.rsplit("/", 1)[-1])
+
+
 def _count_report(saved_paths, submission_id, client_note, contact, reference_number, on_file=None,
                   folder_info=None):
-    """Returns (report html, rows)."""
+    """Returns (report html, rows). Used by the direct upload route, where the
+    files are already on disk."""
     all_rows = []
     for i, path in enumerate(saved_paths, start=1):
         if on_file:
@@ -552,54 +615,205 @@ def _count_report(saved_paths, submission_id, client_note, contact, reference_nu
     return html_body, all_rows
 
 
-def _run_count_job(submission_id, reference_number, contact, client_note, folders=None):
-    local_dir = os.path.join(UPLOAD_DIR, submission_id)
-    record = {"submission_id": submission_id, "reference_number": reference_number, "kind": "count",
-              "contact": contact, "client_note": client_note, "created_at": _now_iso(),
-              "updated_at": _now_iso(), "status": "processing"}
-    history.save(record)
-    try:
-        indices = []
-        saved = _download_submission(
-            submission_id, local_dir,
-            on_progress=lambda n, total: _write_job(submission_id, stage=f"Fetching your files ({n} of {total})..."),
-            indices_out=indices)
-        folder_info = _folder_info(saved, folders or [], indices)
+def _new_count_status(submission_id, reference_number, contact, client_note, folders, portal_url):
+    return {
+        "submission_id": submission_id,
+        "reference_number": reference_number,
+        "kind": "count",
+        "status": "processing",
+        "contact": contact,
+        "client_note": client_note,
+        "folders": folders,
+        "portal_url": portal_url,
+        "created_at": _now_iso(),
+        "updated_at": _now_iso(),
+        "attempts": 0,
+        "error": "",
+        "stage": "Fetching your files...",
+        "file_count": None,
+        "total_items": None,
+        "flagged": None,
+        "sizes": [],
+        "sheets": None,
+        "tabs": None,
+        "dividers": None,
+        "folders_needed": None,
+        "has_report": False,
+    }
 
-        def on_file(n, total):
-            if n == 1 or n == total or n % 10 == 0:
-                _write_job(submission_id, stage=f"Counting pages (file {n} of {total})...")
-        html_body, rows = _count_report(saved, submission_id, client_note, contact, reference_number, on_file,
-                                        folder_info=folder_info)
+
+def _send_count_notice(status, totals):
+    """Tells Kaye that someone used the self-service page count: who they are
+    and the totals, nothing else. No file list, and no download link - the
+    files were never sent to us."""
+    try:
+        contact = status.get("contact", {})
+        ref = status.get("reference_number", "?")
+        rows = "".join(
+            f"<tr><td style='padding:3px 10px 3px 0'><b>{FIELD_LABELS[k]}</b></td>"
+            f"<td>{html_lib.escape(contact.get(k, ''))}</td></tr>"
+            for k in FIELD_LABELS if contact.get(k))
+        figures = [("Pages / items", status.get("total_items")), ("Sheets of paper", status.get("sheets")),
+                   ("Folders", status.get("folders_needed")), ("Tabs", status.get("tabs")),
+                   ("Dividers", status.get("dividers")), ("Files", status.get("file_count"))]
+        totals_rows = "".join(
+            f"<tr><td style='padding:3px 10px 3px 0'><b>{label}</b></td><td>{value:,}</td></tr>"
+            for label, value in figures if isinstance(value, int))
+        note = status.get("client_note")
+        body = (f"<p><b>Self-service page count</b> - this client counted their own pages. "
+                f"Nothing was sent to us and their files have been deleted.</p>"
+                f"<h3>Client details</h3><table>{rows}</table>"
+                + (f"<p><b>Client note:</b> {html_lib.escape(note)}</p>" if note else "")
+                + f"<h3>Totals</h3><table>{totals_rows}</table>"
+                + f"<p style='font-size:12px;color:#777'>Client portal V{VERSION}. "
+                  f"This count is also in {html_lib.escape(status.get('portal_url', ''))}/admin/submissions.</p>")
+        subject = (f"[Page count {ref}] {contact.get('subject') or ''} - "
+                   f"{status.get('file_count') or 0} file(s)")
+        sent, message = send_report_email(
+            subject=subject,
+            html_body=f"<html><body style='font-family:Arial,sans-serif'>{body}</body></html>",
+            csv_attachment_name=f"page_count_{ref}.csv",
+            csv_attachment_bytes=("Page count," + str(ref) + "\n"
+                                  + "\n".join(f"{label},{value}" for label, value in figures
+                                               if isinstance(value, int)) + "\n").encode("utf-8"),
+            original_files=[],
+            reports_dir=REPORTS_DIR,
+        )
+        logger.info(f"Page count notice for {ref}: sent={sent} - {message}")
+    except Exception as e:
+        logger.warning(f"Couldn't send the page count notice: {e}")
+
+
+def _run_count_job(submission_id, status=None):
+    """"Count my pages": fetch one file, count it, delete it, then the next.
+    Only ever one file on disk, and memory has a chance to settle between
+    files - a 5 GB job of big drawings could otherwise take the server down.
+
+    The job is recorded in R2 as well as on disk, so if the server restarts
+    part-way the work can be picked up again instead of being lost."""
+    with _running_lock:
+        if submission_id in _running_jobs:
+            return
+        _running_jobs.add(submission_id)
+    local_dir = os.path.join(UPLOAD_DIR, submission_id)
+    finished = False
+    try:
+        if status is None:
+            status = _load_status(submission_id)
+        if not status:
+            logger.error(f"Count-only {submission_id}: no job record found - nothing to do.")
+            _write_job(submission_id, state="error",
+                       error="We lost track of this page count. Please try again.")
+            return
+        ref = status.get("reference_number", "?")
+        label = f"Count-only {submission_id} (ref {ref})"
+        status["attempts"] = int(status.get("attempts") or 0) + 1
+        if status["attempts"] > MAX_JOB_ATTEMPTS:
+            logger.error(f"{label}: giving up after {status['attempts'] - 1} attempts.")
+            status["status"] = "failed"
+            status["error"] = "Counting was interrupted repeatedly."
+            _save_status_safe(status)
+            _write_job(submission_id, state="error",
+                       error=("We couldn't finish counting these files - they may be too large for the "
+                              "self-service count. Please send them over for a quote instead, or contact us."))
+            finished = True
+            return
+        _save_status_safe(status)
+        _write_job(submission_id, state="processing", stage=status.get("stage") or "Fetching your files...")
+
+        contact = status.get("contact", {})
+        client_note = status.get("client_note", "")
+        folders = status.get("folders") or []
+        objects = sorted(r2_storage.list_objects(_files_prefix(submission_id)), key=lambda o: o["key"])
+        if not objects:
+            raise r2_storage.StorageError("no uploaded files were found in storage")
+
+        os.makedirs(local_dir, exist_ok=True)
+        rows = []
+        folder_info = {}
+        total = len(objects)
+        last_saved = [0.0]
+
+        def stage(text):
+            _write_job(submission_id, state="processing", stage=text)
+            status["stage"] = text
+            if time.time() - last_saved[0] >= PROGRESS_SAVE_SECONDS:
+                last_saved[0] = time.time()
+                _save_status_safe(status)
+
+        for i, obj in enumerate(objects, start=1):
+            name = _original_name(obj["key"])
+            size_mb = obj["size"] / 1024 / 1024
+            logger.info(f"{label}: file {i} of {total} - {name} ({size_mb:.1f} MB), memory {_rss_mb():.0f} MB")
+            stage(f"Counting pages ({i} of {total})...")
+            path = _unique_dest(local_dir, name)
+            r2_storage.download(obj["key"], path)
+            index = _key_index(obj["key"])
+            parts = structure.clean_folder_path(folders[index]) if 0 <= index < len(folders) else []
+            base = os.path.basename(path)
+            folder_info[base] = {"folders": parts, "name": structure.original_name(base, parts)}
+            try:
+                rows.extend(analyze_file(path, base))
+            finally:
+                # One file on disk at a time, whatever happens with this one.
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
+        stage("Building your report...")
+        logger.info(f"{label}: counted {len(rows)} item(s) from {total} file(s), memory {_rss_mb():.0f} MB")
+        html_body = rows_to_html(rows, submission_id, client_note, contact=contact, count_only=True,
+                                 reference_number=ref, folder_info=folder_info)
         with open(os.path.join(JOBS_DIR, f"{submission_id}.html"), "w") as f:
             f.write(html_body)
         _write_job(submission_id, state="done", stage="Done")
-        logger.info(f"Count-only {submission_id} (ref {reference_number}): report ready.")
+
         totals = job_totals(rows, folder_info)
-        record.update(sheets=totals["sheets"], tabs=totals["tabs"], dividers=totals["dividers"],
-                      folders_needed=totals["folders_needed"])
-        record.update(status="done", file_count=len(saved), total_items=len(rows),
+        status.update(status="done", stage="", file_count=total, total_items=len(rows),
                       flagged=sum(1 for r in rows if r.flagged),
                       sizes=history.sizes_for_record(build_size_summary(rows)),
-                      has_report=history.save_report(submission_id, html_body), updated_at=_now_iso())
-        history.save(record)
+                      sheets=totals["sheets"], tabs=totals["tabs"], dividers=totals["dividers"],
+                      folders_needed=totals["folders_needed"],
+                      has_report=history.save_report(submission_id, html_body))
+        _save_status_safe(status)
+        finished = True
+        logger.info(f"{label}: report ready.")
+        _send_count_notice(status, totals)
     except Exception as e:
         logger.exception(f"Count-only {submission_id}: failed - {e}")
         _write_job(submission_id, state="error",
                    error="Something went wrong counting your pages. Please try again.")
-        record.update(status="failed", updated_at=_now_iso())
-        history.save(record)
+        if status:
+            status["status"] = "failed"
+            status["error"] = str(e)[:300]
+            _save_status_safe(status)
+        finished = True
     finally:
         shutil.rmtree(local_dir, ignore_errors=True)
-        try:
-            r2_storage.delete_prefix(f"incoming/{submission_id}/")
-        except Exception as e:
-            logger.warning(f"Count-only {submission_id}: couldn't delete files from storage yet - {e}")
+        with _running_lock:
+            _running_jobs.discard(submission_id)
+        if finished:
+            # Only clear storage once there's nothing left to come back for.
+            try:
+                r2_storage.delete_prefix(f"incoming/{submission_id}/")
+            except Exception as e:
+                logger.warning(f"Count-only {submission_id}: couldn't delete files from storage yet - {e}")
 
 
-_running_jobs = set()
-_running_lock = threading.Lock()
-
+def _resume_count_job(submission_id):
+    """Starts a page count again after the server restarted mid-job. Called
+    when the waiting page checks in and there's no job on this server's disk."""
+    status = _load_status(submission_id)
+    if not status or status.get("kind") != "count" or status.get("status") not in ("processing", "received"):
+        return status
+    with _running_lock:
+        already = submission_id in _running_jobs
+    if not already:
+        logger.info(f"Count-only {submission_id}: picking the job up again after a restart.")
+        threading.Thread(target=_run_count_job, args=(submission_id,), kwargs={"status": status},
+                         daemon=True).start()
+    return status
 
 def _run_quote_job(submission_id):
     """Download -> analyse -> TransferNow/WeTransfer link -> email. The copy in
@@ -762,6 +976,15 @@ def process_submission(submission_id, saved_paths, client_note, contact, referen
         total = len(saved_paths)
         for i, path in enumerate(saved_paths, start=1):
             stage(f"Counting pages ({i} of {total})", force=(i == 1))
+            try:
+                size_mb = os.path.getsize(path) / 1024 / 1024
+            except OSError:
+                size_mb = 0
+            # Big files and every 25th one are logged with the memory in use,
+            # so a job that runs the server out of memory can be traced.
+            if size_mb >= 20 or i % 25 == 0 or i == total:
+                logger.info(f"Submission {submission_id}: counting {i} of {total} - "
+                            f"{os.path.basename(path)} ({size_mb:.1f} MB), memory {_rss_mb():.0f} MB")
             all_rows.extend(analyze_file(path, os.path.basename(path)))
         stage(f"Counting pages done ({total} of {total})", force=True)
         if on_analysed:
@@ -858,8 +1081,18 @@ def cleanup_old_submissions():
             continue  # needs_attention stays until Kaye deals with it
         if submission_id in _running_jobs:
             continue
+        is_count = status.get("kind") == "count"
         idle = (now - _parse_iso(status.get("updated_at"))).total_seconds()
-        if idle < STALLED_AFTER_MINUTES * 60:
+        if idle < (COUNT_STALLED_AFTER_MINUTES if is_count else STALLED_AFTER_MINUTES) * 60:
+            continue
+        if is_count:
+            # The client may have closed the tab, but the count still finishes
+            # and lands in their submission history.
+            if int(status.get("attempts") or 0) >= MAX_JOB_ATTEMPTS:
+                continue  # _run_count_job marks it failed and clears up
+            logger.info(f"Restarting interrupted page count {submission_id} (ref {status['reference_number']}).")
+            threading.Thread(target=_run_count_job, args=(submission_id,), kwargs={"status": status},
+                             daemon=True).start()
             continue
         if int(status.get("attempts") or 0) >= MAX_JOB_ATTEMPTS:
             _mark_needs_attention(status, f"Processing was interrupted {status['attempts']} times.")
@@ -932,9 +1165,10 @@ def attention():
     if not ADMIN_KEY:
         return "Not found.", 404
     if not _admin_ok():
-        return render_template("admin_login.html", wrong=bool(request.values.get("key")))
+        return render_template("admin_login.html", wrong=bool(request.values.get("key")), version=VERSION)
     if not r2_storage.is_configured():
-        return render_template("admin_attention.html", jobs=[], key=request.values["key"], storage_missing=True)
+        return render_template("admin_attention.html", jobs=[], key=request.values["key"], storage_missing=True,
+                               version=VERSION)
     groups = {}
     for obj in r2_storage.list_objects("incoming/"):
         parts = obj["key"].split("/")
@@ -952,13 +1186,15 @@ def attention():
             "status": status.get("status", "?"),
             "error": status.get("error", ""),
             "stage": status.get("stage", ""),
+            "kind": status.get("kind", "quote"),
             "contact": status.get("contact", {}),
             "updated_at": status.get("updated_at", ""),
             "file_count": len(files),
             "total_mb": round(sum(o["size"] for o in files) / 1024 / 1024, 1),
         })
     jobs.sort(key=lambda j: (j["status"] != "needs_attention", j["updated_at"]), reverse=False)
-    return render_template("admin_attention.html", jobs=jobs, key=request.values["key"], storage_missing=False)
+    return render_template("admin_attention.html", jobs=jobs, key=request.values["key"], storage_missing=False,
+                           version=VERSION)
 
 
 @app.route("/admin/attention/files")
@@ -1119,22 +1355,22 @@ def _link_request_allowed(email_key):
 @app.route("/my-submissions", methods=["GET"])
 def my_submissions():
     if not history.is_enabled():
-        return _no_store(Response(render_template("my_submissions.html", mode="unavailable")))
+        return _no_store(Response(render_template("my_submissions.html", version=VERSION, mode="unavailable")))
     c, x, t = request.args.get("c"), request.args.get("x"), request.args.get("t")
     if not (c or x or t):
-        return _no_store(Response(render_template("my_submissions.html", mode="ask")))
+        return _no_store(Response(render_template("my_submissions.html", version=VERSION, mode="ask")))
     ok, reason = history.check_link_params(_token_secret(), c, x, t)
     if not ok:
-        return _no_store(Response(render_template("my_submissions.html", mode="ask", link_problem=reason)))
+        return _no_store(Response(render_template("my_submissions.html", version=VERSION, mode="ask", link_problem=reason)))
     try:
         records = history.list_for_client(c)
     except Exception as e:
         logger.error(f"History: couldn't list submissions - {e}")
-        return _no_store(Response(render_template("my_submissions.html", mode="error"), status=503))
+        return _no_store(Response(render_template("my_submissions.html", version=VERSION, mode="error"), status=503))
     link_params = {"c": c, "x": x, "t": t}
     expires = datetime.fromtimestamp(int(x), timezone.utc).strftime("%d %B %Y")
     return _no_store(Response(render_template(
-        "my_submissions.html", mode="list", expires=expires,
+        "my_submissions.html", version=VERSION, mode="list", expires=expires,
         submissions=[_client_view(r, link_params) for r in records])))
 
 
@@ -1152,7 +1388,7 @@ def my_submissions_request_link():
             logger.info("History link request skipped (too soon since the last one).")
     # The same reply whether or not that address has submissions, so the form
     # can't be used to find out who's a client.
-    return _no_store(Response(render_template("my_submissions.html", mode="sent")))
+    return _no_store(Response(render_template("my_submissions.html", version=VERSION, mode="sent")))
 
 
 def _send_history_link(email, key, portal_url):
@@ -1203,11 +1439,11 @@ def admin_submissions():
         return "Not found.", 404
     if not _admin_ok():
         return render_template("admin_login.html", wrong=bool(request.values.get("key")),
-                               action=url_for("admin_submissions"))
+                               action=url_for("admin_submissions"), version=VERSION)
     key = request.values["key"]
     if not history.is_enabled():
         return render_template("admin_submissions.html", key=key, storage_missing=True, rows=[], q="",
-                               kind="", total=0, page=1, pages=1)
+                               kind="", total=0, page=1, pages=1, version=VERSION)
     q = (request.args.get("q") or "").strip()
     kind = request.args.get("kind") or ""
     try:
@@ -1235,7 +1471,7 @@ def admin_submissions():
         rows.append(dict(r, status_label=ADMIN_STATUS_LABELS.get(r.get("status"), r.get("status") or "?"),
                          created=(r.get("created_at") or "")[:16].replace("T", " ")))
     return render_template("admin_submissions.html", key=key, storage_missing=False, rows=rows, q=q, kind=kind,
-                           total=len(records), page=page, pages=pages)
+                           total=len(records), page=page, pages=pages, version=VERSION)
 
 
 @app.route("/admin/submissions/report")

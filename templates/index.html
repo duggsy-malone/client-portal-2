@@ -190,7 +190,8 @@
   <progress id="progressBar" value="0" max="100" style="display:none"></progress>
   <div id="status"></div>
 
-  <p class="note">Files are used only to prepare your quote and are stored securely for a limited time.</p>
+  <p class="note">Files are used only to prepare your quote and are stored securely for a limited time.
+    <br>Client portal V{{ version }}</p>
 </div>
 
 <script>
@@ -721,7 +722,8 @@ async function waitForCount(initResp) {
   const { submission_id, reference_number, token } = initResp;
   const url = `/upload/status?submission_id=${encodeURIComponent(submission_id)}` +
               `&reference_number=${encodeURIComponent(reference_number)}&token=${encodeURIComponent(token)}`;
-  const giveUpAt = Date.now() + 60 * 60 * 1000;
+  const startedAt = Date.now();
+  const giveUpAt = startedAt + 3 * 60 * 60 * 1000;  // big jobs can take a while
   let networkMisses = 0;
   while (Date.now() < giveUpAt) {
     await sleep(2000);
@@ -735,9 +737,12 @@ async function waitForCount(initResp) {
     }
     if (job.state === 'done') return { report_html: job.report_html, reference_number, history: initResp.history };
     if (job.state === 'error') throw new Error(job.error || 'Something went wrong counting your pages.');
-    setStage(job.stage || 'Counting your pages...', null);
+    const mins = Math.floor((Date.now() - startedAt) / 60000);
+    const elapsed = mins >= 2 ? ` (${mins} minutes so far)` : '';
+    setStage((job.stage || 'Counting your pages...') + elapsed, null);
   }
-  throw new Error('Counting your pages is taking too long - please try again with fewer files.');
+  throw new Error("Counting your pages is taking much longer than expected. It may still finish - you can "
+                  + "request a link to your submissions to check, or try again with fewer files.");
 }
 
 // Main path: files go straight from this browser to Cloudflare R2 (up to 3

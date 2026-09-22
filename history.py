@@ -128,7 +128,9 @@ def _load_many(objects):
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         records = [r for r in pool.map(fetch, objects) if r]
-    records.sort(key=lambda r: r.get("submission_id", ""), reverse=True)  # ids start with date+time
+    # Newest first. created_at is exact to the microsecond, so two submissions
+    # in the same second still sort in the right order.
+    records.sort(key=lambda r: (r.get("created_at") or "", r.get("submission_id", "")), reverse=True)
     return records
 
 

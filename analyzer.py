@@ -432,9 +432,24 @@ def analyze_zip(path, source_file, location="", depth=0):
     return rows
 
 
+# A single file bigger than this isn't opened at all. Reading a very large
+# file can use more memory than the server has, which takes the whole job
+# down with it - one file listed as "check manually" is a much better
+# outcome. Raise it with ANALYSE_MAX_FILE_MB if the server has the memory.
+MAX_ANALYSE_BYTES = int(os.environ.get("ANALYSE_MAX_FILE_MB", "750")) * 1024 * 1024
+
+
 def analyze_file(path, original_filename):
     """Entry point: dispatch on extension. Returns a list of Row objects."""
     ext = os.path.splitext(original_filename)[1].lower()
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        size = 0
+    if size > MAX_ANALYSE_BYTES:
+        return [Row(original_filename, "", ext.lstrip(".").upper() or "Unknown", "Whole file", flagged=True,
+                    notes=(f"File is {size / 1024 / 1024:.0f} MB, too large to open safely here - it's included "
+                           f"with the original files, please check it manually."))]
     if ext == ".zip":
         return analyze_zip(path, original_filename)
     elif ext in DISPATCH:
