@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex">
-<title>All submissions</title>
+<title>All submissions - {{ app_name }}</title>
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; background: #f4f6f8; margin: 0; color: #222; }
   .wrap { max-width: 1200px; margin: 32px auto; padding: 0 16px; }
@@ -37,7 +37,7 @@
 <body>
 <div class="wrap">
   <p class="nav"><a href="{{ url_for('attention', key=key) }}">Uploads in progress / needing attention &rarr;</a></p>
-  <h1>All submissions</h1>
+  <h1>{{ app_name }} &ndash; all submissions</h1>
 
   {% if storage_missing %}
     <div class="empty">Cloudflare R2 isn't set up, so submission history isn't being recorded.</div>
@@ -91,7 +91,7 @@
   {% endif %}
   {% endif %}
   {% endif %}
-  <p class="count" style="margin-top:14px">Client portal V{{ version }}</p>
+  <p class="count" style="margin-top:14px">{{ app_name }} V{{ version }}</p>
 </div>
 </body>
 </html>

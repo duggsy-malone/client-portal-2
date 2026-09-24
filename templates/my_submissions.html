@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex">
-<title>My submissions</title>
+<title>My submissions - {{ app_name }}</title>
 <style>
   :root { --brand: #2c3e50; --accent: #2980b9; }
   * { box-sizing: border-box; }
@@ -35,6 +35,7 @@
 </head>
 <body>
 <div class="wrap">
+  <p style="font-size:1.05rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--brand);margin:0 0 2px">&#9992; {{ app_name }}</p>
   <h1>My submissions</h1>
 
   {% if mode == 'unavailable' %}
@@ -98,7 +99,7 @@
     <p class="foot">This private link works until {{ expires }}. Please don't share it &ndash; anyone with it can see this page.
       <br><a href="{{ url_for('index') }}">Send us more files</a></p>
   {% endif %}
-  <p class="foot">Client portal V{{ version }}</p>
+  <p class="foot">{{ app_name }} V{{ version }}</p>
 </div>
 </body>
 </html>

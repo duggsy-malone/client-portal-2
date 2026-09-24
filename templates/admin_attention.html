@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Uploads needing attention</title>
+<title>Uploads needing attention - {{ app_name }}</title>
 {% if jobs|selectattr("status", "in", ["processing", "received"])|list %}<meta http-equiv="refresh" content="60">{% endif %}
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; background: #f4f6f8; margin: 0; color: #222; }
@@ -33,7 +33,7 @@
 <body>
 <div class="wrap">
   <p class="nav"><a href="{{ url_for('admin_submissions', key=key) }}">All submissions &rarr;</a></p>
-  <h1>Uploads in progress or needing attention</h1>
+  <h1>{{ app_name }} &ndash; uploads in progress or needing attention</h1>
   {% if storage_missing %}
     <div class="empty">Cloudflare R2 isn't set up yet, so there's nothing to show here.</div>
   {% elif not jobs %}
@@ -66,7 +66,7 @@
     </div>
   </div>
   {% endfor %}
-  <p class="nav" style="text-align:left;color:#90a4ae;font-size:12px">Client portal V{{ version }}</p>
+  <p class="nav" style="text-align:left;color:#90a4ae;font-size:12px">{{ app_name }} V{{ version }}</p>
 </div>
 </body>
 </html>

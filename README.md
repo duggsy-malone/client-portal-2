@@ -1,4 +1,8 @@
-# Client File Upload & Quoting Portal - V2.0
+# Flightpath - client file upload & quoting portal (V2.0)
+
+The portal is called **Flightpath**. The name and version live in `version.py` (`APP_NAME`, `VERSION`) and flow through the pages, the report headings and footers, and the email subjects ("[Flightpath quote 220926-00027] ...", "[Flightpath page count ...]"). Change them in that one file.
+
+Worth setting in Render too: `EMAIL_FROM_NAME=Flightpath`, so that's the sender name clients see.
 
 A drag-and-drop portal for clients to upload job files (PDF, JPG, ZIP, PPTX, XLSX).
 Every submission is analysed automatically in the background - page/slide/sheet
@@ -298,13 +302,13 @@ Before they can submit, the client has to tick "I've checked my file list and I 
 - **Totals, together:** pages/items, estimated sheets of paper, **folders needed** (one folder holds 380 sheets printed double-sided - change `SHEETS_PER_FOLDER` in `report.py`), **tabs** (one per folder, at every level, including the outer folder the client dragged in, and a ZIP counts as a folder), **dividers** (one per document: every file, and every file inside a ZIP), and files.
 - **Spreadsheets - check these:** every Excel file with its folder, worksheets, estimated pages, sizes, and whether the print size is set in the file or estimated.
 - **Quantity by size**, with non-standard sizes broken down.
-- **Suggested scaling**, in its own section and deliberately not counted into the totals, so it can be checked: each odd size, how many there are, and what would fit it - "Scale up to A4" (smaller than A4), "Scale up to A3" (bigger than A4, within A3), "Scale down to A3" (bigger than A3), or "Too small to scale - check manually" for anything under 100mm on its long side (`MIN_SCALE_LONG_MM` in `paper_sizes.py`).
+- **Suggested scaling**, in its own section and deliberately not counted into the totals, so it can be checked: each odd size, how many there are, and what would fit it - "Scale up to A4" (smaller than A4), "Scale up to A3" (bigger than A4, within A3), "Scale down to A3" (bigger than A3), or "Too small to scale - check manually" for anything under 100mm on its long side (`MIN_SCALE_LONG_MM` in `paper_sizes.py`). Every **PowerPoint** deck is listed here too, whatever its slide size, as "Scale to A4 - PowerPoint slides", counted by slides rather than by deck. Each suggestion gets a **subtotal**, with an overall total at the bottom.
 - **Folder structure:** a diagram of the folders with documents and pages in each folder (including subfolders). In the page-count report each folder has a "show files" toggle; the email shows folders only.
 - **Full breakdown** of every page.
 - In a **browser** (the page-count report, and the saved copies on the admin and My submissions pages) the sections above are **tabs**, so the page isn't one endless scroll; the heading, client details and totals stay above them, and the tab you picked is remembered while the tab stays open. Emails can't do tabs, so the quote email shows every section stacked.
 - The CSV has the same totals, spreadsheet and folder sections.
 - Folder details come from the upload page, which sends each file's real folder path. Reports from before this change can't be recounted for tabs.
-- **ZIP files are refused**, on the upload page and again on the server: a large ZIP can't be unpacked safely here, and an unzipped folder gives a proper page count plus tabs and dividers. The message asks the client to unzip and drag the folder in.
+- **ZIPs are accepted and opened one file at a time**: each file inside is written out, counted and deleted before the next, so a single 5GB archive holding the whole job never lands on the server in one go (a 655MB ZIP of 155 files peaked at 57MB of memory in rehearsal). Folders inside the archive become tabs, files inside become dividers, and nested ZIPs work to three levels deep. Progress comes from inside the archive too ("Counting pages (12 of 300 inside job.zip)..."), so a single-ZIP job doesn't look stuck. Two guards: an entry that expands more than 200x (a "zip bomb") and anything over `ANALYSE_MAX_FILE_MB` are listed as "check manually" rather than opened, as is an archive holding more than 20,000 files.
 - **US Letter counts as A4** in the size totals (like US Legal). The true measurements are still in the full breakdown.
 - **Spreadsheet sizes:** only cells with something in them count towards a sheet's estimated size (formatting on empty cells is ignored). A sheet that still comes out bigger than 2.5 m on a side is listed as "check manually" instead of given a size.
 

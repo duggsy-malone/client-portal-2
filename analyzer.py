@@ -16,9 +16,10 @@ Design notes / honest limitations (see README for the full explanation):
     (authoritative). Where it wasn't, we estimate the used range's physical
     size from column widths / row heights, which is an approximation, not
     an exact print-page size.
-  - ZIP: unpacked recursively (depth-limited) and every supported file
-    inside is analysed and listed individually, prefixed with its path
-    inside the archive.
+  - ZIP: opened one file at a time (never unpacked as a whole), recursively
+    and depth-limited, with every file inside analysed and listed
+    individually, prefixed with its path inside the archive. Memory and disk
+    stay flat however big the archive is.
 """
 
 import os
@@ -42,7 +43,19 @@ from paper_sizes import (
 SUPPORTED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".zip", ".pptx", ".xlsx", ".xlsm"}
 ASSUMED_IMAGE_DPI = 300
 MAX_ZIP_DEPTH = 3
-MAX_ZIP_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024  # 2GB guard against zip bombs
+# ZIPs are opened one file at a time, so their total size doesn't matter -
+# these guard against the two things that do: an archive with a silly number
+# of files in it, and a "zip bomb" entry that expands enormously.
+MAX_ZIP_ENTRIES = 20000
+MAX_ZIP_EXPANSION_RATIO = 200
+MAX_ZIP_ENTRY_CHECK_BYTES = 100 * 1024 * 1024  # only large entries are ratio-checked
+
+# A single file bigger than this isn't opened at all. Reading a very large
+# file can use more memory than the server has, which takes the whole job
+# down with it - one file listed as "check manually" is a much better
+# outcome. ZIPs are exempt: they're opened one file at a time, so their own
+# size doesn't matter. Raise it with ANALYSE_MAX_FILE_MB if there's memory.
+MAX_ANALYSE_BYTES = int(os.environ.get("ANALYSE_MAX_FILE_MB", "750")) * 1024 * 1024
 
 
 @dataclass
@@ -391,7 +404,32 @@ DISPATCH = {
 }
 
 
-def analyze_zip(path, source_file, location="", depth=0):
+def _extract_one(zf, info, dest_dir):
+    """Writes ONE file out of the archive to disk in small chunks, and returns
+    its path. Nothing is held in memory, and the rest of the archive stays
+    where it is - a 4 GB ZIP of drawings must not land on the disk (or in the
+    memory) of a small server all at once."""
+    dest = os.path.join(dest_dir, "entry" + os.path.splitext(info.filename)[1].lower())
+    with zf.open(info) as src, open(dest, "wb") as out:
+        shutil.copyfileobj(src, out, length=1024 * 1024)
+    return dest
+
+
+def _suspicious_entry(info):
+    """A "zip bomb" is a small archive that expands to something enormous.
+    Anything that expands more than this much, and is large with it, is
+    listed rather than opened."""
+    if info.file_size <= MAX_ZIP_ENTRY_CHECK_BYTES:
+        return False
+    if not info.compress_size:
+        return False
+    return info.file_size / info.compress_size > MAX_ZIP_EXPANSION_RATIO
+
+
+def analyze_zip(path, source_file, location="", depth=0, on_item=None):
+    """Every file inside the archive, one at a time: written out, analysed,
+    deleted, then the next one. Folders inside the archive are kept in each
+    row's location, so the report can show the structure."""
     rows = []
     if depth >= MAX_ZIP_DEPTH:
         rows.append(Row(source_file, location, "ZIP", "Whole archive",
@@ -400,58 +438,87 @@ def analyze_zip(path, source_file, location="", depth=0):
     tmpdir = tempfile.mkdtemp(prefix="zipscan_")
     try:
         with zipfile.ZipFile(path) as zf:
-            total_size = sum(i.file_size for i in zf.infolist())
-            if total_size > MAX_ZIP_UNCOMPRESSED_BYTES:
-                rows.append(Row(source_file, location, "ZIP", "Whole archive",
-                                 flagged=True, notes="Archive too large when uncompressed - not scanned."))
+            entries = [i for i in zf.infolist() if not i.is_dir()]
+            if len(entries) > MAX_ZIP_ENTRIES:
+                rows.append(Row(source_file, location, "ZIP", "Whole archive", flagged=True,
+                                 notes=(f"Archive holds {len(entries):,} files, more than this tool opens "
+                                        f"({MAX_ZIP_ENTRIES:,}) - please check it manually.")))
                 return rows
-            zf.extractall(tmpdir)
-            for info in zf.infolist():
-                if info.is_dir():
-                    continue
+            for position, info in enumerate(entries, start=1):
+                if on_item:
+                    try:
+                        on_item(position, len(entries), os.path.basename(info.filename))
+                    except Exception:
+                        pass
                 name = info.filename
                 base = os.path.basename(name)
-                if base.startswith(".") or "__MACOSX" in name:
+                if base.startswith(".") or "__MACOSX" in name or "__MACOSX" in name.upper():
                     continue
                 ext = os.path.splitext(base)[1].lower()
-                full_path = os.path.join(tmpdir, name)
                 inner_location = f"{location}{os.path.basename(path)}/{name}" if not location else f"{location}{name}"
-                if ext == ".zip":
-                    rows.extend(analyze_zip(full_path, source_file, location=inner_location + " > ", depth=depth + 1))
-                elif ext in DISPATCH:
-                    rows.extend(DISPATCH[ext](full_path, source_file, location=inner_location))
-                else:
+                if _suspicious_entry(info):
+                    rows.append(Row(source_file, inner_location, ext.lstrip(".").upper() or "Unknown",
+                                     "Whole file", flagged=True,
+                                     notes=(f"This file expands from {info.compress_size / 1024 / 1024:.0f} MB to "
+                                            f"{info.file_size / 1024 / 1024:.0f} MB inside the archive - not opened, "
+                                            f"please check it manually.")))
+                    continue
+                if info.file_size > MAX_ANALYSE_BYTES and ext != ".zip":
+                    rows.append(Row(source_file, inner_location, ext.lstrip(".").upper() or "Unknown",
+                                     "Whole file", flagged=True,
+                                     notes=(f"File is {info.file_size / 1024 / 1024:.0f} MB, too large to open "
+                                            f"safely here - please check it manually.")))
+                    continue
+                if ext != ".zip" and ext not in DISPATCH:
                     rows.append(Row(source_file, inner_location, ext.lstrip(".").upper() or "Unknown",
                                      "Whole file", flagged=False,
                                      notes="File type not analysed by this tool (listed for reference only)."))
+                    continue
+                entry_path = None
+                try:
+                    entry_path = _extract_one(zf, info, tmpdir)
+                    if ext == ".zip":
+                        rows.extend(analyze_zip(entry_path, source_file,
+                                                location=inner_location + " > ", depth=depth + 1,
+                                                on_item=on_item))
+                    else:
+                        rows.extend(DISPATCH[ext](entry_path, source_file, location=inner_location))
+                except Exception as e:
+                    rows.append(Row(source_file, inner_location, ext.lstrip(".").upper() or "Unknown",
+                                     "Whole file", flagged=True,
+                                     notes=f"Couldn't read this file inside the archive: {e}"))
+                finally:
+                    # One file out of the archive at a time.
+                    if entry_path:
+                        try:
+                            os.remove(entry_path)
+                        except OSError:
+                            pass
     except Exception as e:
         rows.append(Row(source_file, location, "ZIP", "Whole archive",
                          flagged=True, notes=f"Could not open archive: {e}"))
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+    if not rows:
+        rows.append(Row(source_file, location, "ZIP", "Whole archive", flagged=True,
+                         notes="Archive is empty, or holds nothing we can count - please check it manually."))
     return rows
 
-
-# A single file bigger than this isn't opened at all. Reading a very large
-# file can use more memory than the server has, which takes the whole job
-# down with it - one file listed as "check manually" is a much better
-# outcome. Raise it with ANALYSE_MAX_FILE_MB if the server has the memory.
-MAX_ANALYSE_BYTES = int(os.environ.get("ANALYSE_MAX_FILE_MB", "750")) * 1024 * 1024
-
-
-def analyze_file(path, original_filename):
-    """Entry point: dispatch on extension. Returns a list of Row objects."""
+def analyze_file(path, original_filename, on_item=None):
+    """Entry point: dispatch on extension. Returns a list of Row objects.
+    `on_item(position, total, name)`, if given, is called for each file inside
+    a ZIP, so a job that's one big archive can still show progress."""
     ext = os.path.splitext(original_filename)[1].lower()
     try:
         size = os.path.getsize(path)
     except OSError:
         size = 0
-    if size > MAX_ANALYSE_BYTES:
+    if size > MAX_ANALYSE_BYTES and ext != ".zip":
         return [Row(original_filename, "", ext.lstrip(".").upper() or "Unknown", "Whole file", flagged=True,
                     notes=(f"File is {size / 1024 / 1024:.0f} MB, too large to open safely here - it's included "
                            f"with the original files, please check it manually."))]
     if ext == ".zip":
-        return analyze_zip(path, original_filename)
+        return analyze_zip(path, original_filename, on_item=on_item)
     elif ext in DISPATCH:
         return DISPATCH[ext](path, original_filename)
     else:

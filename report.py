@@ -3,13 +3,14 @@ from the list of Row objects produced by the analyzer."""
 
 import csv
 import html as _html
+import re
 import io
 from collections import OrderedDict
 from datetime import datetime
 
 import structure
 from paper_sizes import suggest_scale
-from version import VERSION
+from version import APP_NAME, VERSION
 
 
 def _e(v):
@@ -109,19 +110,53 @@ def plans_label(plans_to_scale):
     return "PRINTED TO SCALE" if plans_to_scale else "A3 FOLDED (not to scale)"
 
 
+SLIDE_SUGGESTION = "Scale to A4 - PowerPoint slides"
+
+
+def _slide_count(row):
+    """"3 slide(s) @ deck size" -> 3. A deck is one row but several slides."""
+    m = re.match(r"\s*(\d+)\s+slide", row.unit_label or "")
+    return int(m.group(1)) if m else 1
+
+
 def build_scaling_suggestions(rows):
     """One entry per odd size, with what to do about it:
     [{size, qty, suggestion}], most common first. Deliberately separate from
-    the size totals so the suggestions can be checked on their own."""
+    the size totals so the suggestions can be checked on their own.
+
+    PowerPoint slides are always listed here, whatever their deck size,
+    because they're always printed scaled to A4."""
     counts = OrderedDict()
     for r in rows:
-        if r.width_mm is None or r.height_mm is None or r.is_standard:
+        if r.width_mm is None or r.height_mm is None:
             continue
-        key = tuple(sorted((int(round(abs(r.width_mm))), int(round(abs(r.height_mm))))))
-        counts[key] = counts.get(key, 0) + 1
-    entries = [{"size": f"{a} \u00d7 {b} mm", "qty": qty, "suggestion": suggest_scale(a, b)}
-               for (a, b), qty in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+        is_slides = (r.file_type or "").upper() == "PPTX"
+        if r.is_standard and not is_slides:
+            continue
+        a, b = sorted((int(round(abs(r.width_mm))), int(round(abs(r.height_mm)))))
+        key = (a, b, is_slides)
+        counts[key] = counts.get(key, 0) + (_slide_count(r) if is_slides else 1)
+    entries = [{"size": f"{a} \u00d7 {b} mm" + (" (PowerPoint)" if is_slides else ""),
+                "qty": qty, "suggestion": SLIDE_SUGGESTION if is_slides else suggest_scale(a, b)}
+               for (a, b, is_slides), qty in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
     return entries
+
+
+# The order suggestions are grouped in, so a report always reads the same way.
+SCALE_ORDER = ["Scale up to A4", "Scale up to A3", "Scale down to A3", SLIDE_SUGGESTION,
+               "Too small to scale - check manually"]
+
+
+def group_scaling_suggestions(entries):
+    """Groups build_scaling_suggestions() by suggestion and adds a subtotal
+    for each: [{suggestion, sizes: [...], qty}] plus an overall total."""
+    groups = OrderedDict()
+    for entry in entries:
+        groups.setdefault(entry["suggestion"], []).append(entry)
+    ordered = sorted(groups.items(),
+                     key=lambda kv: (SCALE_ORDER.index(kv[0]) if kv[0] in SCALE_ORDER else len(SCALE_ORDER), kv[0]))
+    return [{"suggestion": suggestion, "sizes": sizes, "qty": sum(e["qty"] for e in sizes)}
+            for suggestion, sizes in ordered]
 
 
 def rows_to_csv(rows, folder_info=None, plans_to_scale=None):
@@ -155,10 +190,15 @@ def rows_to_csv(rows, folder_info=None, plans_to_scale=None):
 
     suggestions = build_scaling_suggestions(rows)
     if suggestions:
+        groups = group_scaling_suggestions(suggestions)
         writer.writerow([f"SUGGESTED SCALING ({len(suggestions)} odd size(s)) - separate from the totals above"])
-        writer.writerow(["Size", "Quantity", "Suggestion"])
-        for entry in suggestions:
-            writer.writerow([entry["size"].replace("\u00d7", "x"), entry["qty"], entry["suggestion"]])
+        writer.writerow(["Suggestion", "Size", "Quantity"])
+        for group in groups:
+            for entry in group["sizes"]:
+                writer.writerow([group["suggestion"], entry["size"].replace("\u00d7", "x"), entry["qty"]])
+            writer.writerow([f"{group['suggestion']} - subtotal", f"{len(group['sizes'])} size(s)", group["qty"]])
+        writer.writerow(["All odd sizes - total", f"{len(suggestions)} size(s)",
+                         sum(g["qty"] for g in groups)])
         writer.writerow([])
 
     writer.writerow(["QUANTITY BY SIZE"])
@@ -329,6 +369,9 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
       tr.flagged { background: #fff3cd; }
       tr.nonstandard-summary { background: #fff3cd; }
       tr.nonstandard-sub { background: #fffaeb; color: #555; }
+      tr.subtotal { background: #eceff1; }
+      tr.grandtotal { background: #2c3e50; color: #fff; }
+      tr.grandtotal b { color: #fff; }
       .summary { margin-bottom: 16px; }
       .badge { display:inline-block; background:#c0392b; color:#fff; padding:2px 8px; border-radius:10px; font-size:12px; }
       h3 { color: #2c3e50; margin-top: 0; }
@@ -485,13 +528,23 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
     suggestions = build_scaling_suggestions(rows)
     scaling_body = ""
     if suggestions:
-        scale_rows = "".join(
-            f'<tr><td>{_e(entry["size"])}</td><td class="qty">{entry["qty"]}</td>'
-            f'<td>{_e(entry["suggestion"])}</td></tr>' for entry in suggestions)
+        groups = group_scaling_suggestions(suggestions)
+        scale_rows = ""
+        for group in groups:
+            for entry in group["sizes"]:
+                scale_rows += (f'<tr><td>{_e(group["suggestion"])}</td><td>{_e(entry["size"])}</td>'
+                               f'<td class="qty">{entry["qty"]}</td></tr>')
+            scale_rows += (f'<tr class="subtotal"><td><b>{_e(group["suggestion"])} &ndash; subtotal</b></td>'
+                           f'<td>{len(group["sizes"])} size{"" if len(group["sizes"]) == 1 else "s"}</td>'
+                           f'<td class="qty">{group["qty"]}</td></tr>')
+        scale_rows += (f'<tr class="grandtotal"><td><b>All odd sizes</b></td>'
+                       f'<td>{len(suggestions)} size{"" if len(suggestions) == 1 else "s"}</td>'
+                       f'<td class="qty">{sum(g["qty"] for g in groups)}</td></tr>')
         scaling_body = (
             '<p style="font-size:12px;color:#777;margin:0 0 8px">Sizes that don\'t match a recognised '
-            'size, and what would fit them. Shown on its own, not counted into the totals above.</p>'
-            f'<table><tr><th>Size</th><th>Quantity</th><th>Suggestion</th></tr>{scale_rows}</table>')
+            'size, and what would fit them, with a subtotal for each suggestion. Shown on its own, not '
+            'counted into the totals above.</p>'
+            f'<table><tr><th>Suggestion</th><th>Size</th><th>Quantity</th></tr>{scale_rows}</table>')
 
     tree = structure.build_tree(documents)
     tree_body = ""
@@ -516,7 +569,8 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
     </table>"""
 
     display_ref = reference_number or submission_id
-    heading = f"Page count summary - ref {display_ref}" if count_only else f"New quote request - ref {display_ref}"
+    heading = (f"{APP_NAME} page count - ref {display_ref}" if count_only
+               else f"{APP_NAME} quote request - ref {display_ref}")
     if title:
         heading = _e(title)
 
@@ -538,7 +592,7 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
                 ("Folder structure", tree_body),
                 ("Full breakdown", breakdown_body)], collapsible)}
     <p style="margin-top:16px;font-size:12px;color:#777">
-      Client portal V{VERSION}. Full-size estimates for images and unformatted spreadsheets are approximations - see the
+      {APP_NAME} V{VERSION}. Full-size estimates for images and unformatted spreadsheets are approximations - see the
       accompanying README for details.
       {"Files used for this page count were analysed and then deleted immediately - nothing was kept."
        if count_only else "The portal deletes its own copy of the original files once they've been passed on."}

@@ -48,7 +48,7 @@ from reference_number import next_reference_number
 import r2_storage
 import history
 import structure
-from version import VERSION
+from version import APP_NAME, VERSION
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("portal")
@@ -136,18 +136,11 @@ def _validate_contact(contact, count_only):
 
 
 def _validate_file_names(names):
-    """Any file type is accepted except ZIPs. Types the analyser can't count
-    pages for still go to Kaye in the download link, marked 'check manually'.
-
-    ZIPs are refused because a big one can't be unpacked safely here, and
-    unpacked folders give a proper page count plus tabs and dividers."""
+    """Any file type is accepted, ZIPs included - they're opened one file at a
+    time. Types the analyser can't count pages for still go to Kaye in the
+    download link, marked 'check manually'."""
     if not names or not any((n or "").strip() for n in names):
         return "No files received."
-    zipped = [os.path.basename(n or "") for n in names if (n or "").lower().strip().endswith(".zip")]
-    if zipped:
-        return ("ZIP files can't be counted: " + ", ".join(zipped[:3])
-                + ("..." if len(zipped) > 3 else "")
-                + ". Please unzip, then drag the folder itself onto the page.")
     return None
 
 
@@ -266,12 +259,12 @@ def _start_background_jobs():
 
 @app.route("/")
 def index():
-    return render_template("index.html", version=VERSION)
+    return render_template("index.html", version=VERSION, app_name=APP_NAME)
 
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok", "version": VERSION})
+    return jsonify({"status": "ok", "app": APP_NAME, "version": VERSION})
 
 
 # ==========================================================================
@@ -665,9 +658,9 @@ def _send_count_notice(status, totals):
                 f"<h3>Client details</h3><table>{rows}</table>"
                 + (f"<p><b>Client note:</b> {html_lib.escape(note)}</p>" if note else "")
                 + f"<h3>Totals</h3><table>{totals_rows}</table>"
-                + f"<p style='font-size:12px;color:#777'>Client portal V{VERSION}. "
+                + f"<p style='font-size:12px;color:#777'>{APP_NAME} V{VERSION}. "
                   f"This count is also in {html_lib.escape(status.get('portal_url', ''))}/admin/submissions.</p>")
-        subject = (f"[Page count {ref}] {contact.get('subject') or ''} - "
+        subject = (f"[{APP_NAME} page count {ref}] {contact.get('subject') or ''} - "
                    f"{status.get('file_count') or 0} file(s)")
         sent, message = send_report_email(
             subject=subject,
@@ -682,6 +675,24 @@ def _send_count_notice(status, totals):
         logger.info(f"Page count notice for {ref}: sent={sent} - {message}")
     except Exception as e:
         logger.warning(f"Couldn't send the page count notice: {e}")
+
+
+def _inside_zip_progress(stage, file_number, file_total, file_name):
+    """A job is often a single ZIP with everything in it, so progress has to
+    come from inside the archive too - otherwise it sits on "1 of 1" for an
+    hour. Updated every few files, not every one."""
+    last = [0.0]
+
+    def on_item(position, items, _name):
+        if items < 2:
+            return
+        now = time.time()
+        if position != items and now - last[0] < 3:
+            return
+        last[0] = now
+        of_files = f"file {file_number} of {file_total}: " if file_total > 1 else ""
+        stage(f"Counting pages ({of_files}{position} of {items} inside {file_name})...")
+    return on_item
 
 
 def _run_count_job(submission_id, status=None):
@@ -748,12 +759,13 @@ def _run_count_job(submission_id, status=None):
             stage(f"Counting pages ({i} of {total})...")
             path = _unique_dest(local_dir, name)
             r2_storage.download(obj["key"], path)
+            inside = _inside_zip_progress(stage, i, total, name)
             index = _key_index(obj["key"])
             parts = structure.clean_folder_path(folders[index]) if 0 <= index < len(folders) else []
             base = os.path.basename(path)
             folder_info[base] = {"folders": parts, "name": structure.original_name(base, parts)}
             try:
-                rows.extend(analyze_file(path, base))
+                rows.extend(analyze_file(path, base, on_item=inside))
             finally:
                 # One file on disk at a time, whatever happens with this one.
                 try:
@@ -948,7 +960,7 @@ def _mark_needs_attention(status, reason, send_alert=True):
 def _send_alert(reference_number, subject, html_body):
     try:
         sent, message = send_report_email(
-            subject=f"[Quote request {reference_number}] {subject}",
+            subject=f"[{APP_NAME} quote {reference_number}] {subject}",
             html_body=f"<html><body style='font-family:Arial,sans-serif'>{html_body}</body></html>",
             csv_attachment_name=f"alert_{reference_number}.csv",
             csv_attachment_bytes=f"Quote request,{reference_number}\nStatus,Needs attention\n".encode("utf-8"),
@@ -985,7 +997,8 @@ def process_submission(submission_id, saved_paths, client_note, contact, referen
             if size_mb >= 20 or i % 25 == 0 or i == total:
                 logger.info(f"Submission {submission_id}: counting {i} of {total} - "
                             f"{os.path.basename(path)} ({size_mb:.1f} MB), memory {_rss_mb():.0f} MB")
-            all_rows.extend(analyze_file(path, os.path.basename(path)))
+            inside = _inside_zip_progress(lambda text: stage(text), i, total, os.path.basename(path))
+            all_rows.extend(analyze_file(path, os.path.basename(path), on_item=inside))
         stage(f"Counting pages done ({total} of {total})", force=True)
         if on_analysed:
             try:
@@ -1017,7 +1030,7 @@ def process_submission(submission_id, saved_paths, client_note, contact, referen
         csv_bytes = rows_to_csv(all_rows, folder_info, plans_to_scale).encode("utf-8")
         csv_name = f"analysis_{reference_number}.csv"
         flagged = sum(1 for r in all_rows if r.flagged)
-        subject_line = (f"[Quote request {reference_number}] {contact.get('subject') or ''} - "
+        subject_line = (f"[{APP_NAME} quote {reference_number}] {contact.get('subject') or ''} - "
                         f"{len(saved_paths)} file(s)" + (f" - {flagged} flagged for review" if flagged else "")
                         + {True: " - TO SCALE", False: " - A3 FOLDED", None: ""}[plans_to_scale])
         files_to_attach = [] if wetransfer_link else saved_paths
@@ -1165,10 +1178,10 @@ def attention():
     if not ADMIN_KEY:
         return "Not found.", 404
     if not _admin_ok():
-        return render_template("admin_login.html", wrong=bool(request.values.get("key")), version=VERSION)
+        return render_template("admin_login.html", wrong=bool(request.values.get("key")), version=VERSION, app_name=APP_NAME)
     if not r2_storage.is_configured():
         return render_template("admin_attention.html", jobs=[], key=request.values["key"], storage_missing=True,
-                               version=VERSION)
+                               version=VERSION, app_name=APP_NAME)
     groups = {}
     for obj in r2_storage.list_objects("incoming/"):
         parts = obj["key"].split("/")
@@ -1194,7 +1207,7 @@ def attention():
         })
     jobs.sort(key=lambda j: (j["status"] != "needs_attention", j["updated_at"]), reverse=False)
     return render_template("admin_attention.html", jobs=jobs, key=request.values["key"], storage_missing=False,
-                           version=VERSION)
+                           version=VERSION, app_name=APP_NAME)
 
 
 @app.route("/admin/attention/files")
@@ -1293,7 +1306,7 @@ def _send_confirmation_email(contact, reference_number, portal_url, plans_to_sca
             f"{history.LINK_VALID_DAYS} days. You can get a new one any time at "
             f"{html_lib.escape(portal_url)}/my-submissions</p>")
         sent, message = send_client_email(contact.get("email"),
-                                          f"We've received your files - ref {reference_number}", body)
+                                          f"{APP_NAME}: we've received your files - ref {reference_number}", body)
         logger.info(f"Confirmation email for {reference_number}: sent={sent} - {message}")
     except Exception as e:
         logger.warning(f"Confirmation email for {reference_number} failed: {e}")
@@ -1355,22 +1368,22 @@ def _link_request_allowed(email_key):
 @app.route("/my-submissions", methods=["GET"])
 def my_submissions():
     if not history.is_enabled():
-        return _no_store(Response(render_template("my_submissions.html", version=VERSION, mode="unavailable")))
+        return _no_store(Response(render_template("my_submissions.html", version=VERSION, app_name=APP_NAME, mode="unavailable")))
     c, x, t = request.args.get("c"), request.args.get("x"), request.args.get("t")
     if not (c or x or t):
-        return _no_store(Response(render_template("my_submissions.html", version=VERSION, mode="ask")))
+        return _no_store(Response(render_template("my_submissions.html", version=VERSION, app_name=APP_NAME, mode="ask")))
     ok, reason = history.check_link_params(_token_secret(), c, x, t)
     if not ok:
-        return _no_store(Response(render_template("my_submissions.html", version=VERSION, mode="ask", link_problem=reason)))
+        return _no_store(Response(render_template("my_submissions.html", version=VERSION, app_name=APP_NAME, mode="ask", link_problem=reason)))
     try:
         records = history.list_for_client(c)
     except Exception as e:
         logger.error(f"History: couldn't list submissions - {e}")
-        return _no_store(Response(render_template("my_submissions.html", version=VERSION, mode="error"), status=503))
+        return _no_store(Response(render_template("my_submissions.html", version=VERSION, app_name=APP_NAME, mode="error"), status=503))
     link_params = {"c": c, "x": x, "t": t}
     expires = datetime.fromtimestamp(int(x), timezone.utc).strftime("%d %B %Y")
     return _no_store(Response(render_template(
-        "my_submissions.html", version=VERSION, mode="list", expires=expires,
+        "my_submissions.html", version=VERSION, app_name=APP_NAME, mode="list", expires=expires,
         submissions=[_client_view(r, link_params) for r in records])))
 
 
@@ -1388,7 +1401,7 @@ def my_submissions_request_link():
             logger.info("History link request skipped (too soon since the last one).")
     # The same reply whether or not that address has submissions, so the form
     # can't be used to find out who's a client.
-    return _no_store(Response(render_template("my_submissions.html", version=VERSION, mode="sent")))
+    return _no_store(Response(render_template("my_submissions.html", version=VERSION, app_name=APP_NAME, mode="sent")))
 
 
 def _send_history_link(email, key, portal_url):
@@ -1402,7 +1415,7 @@ def _send_history_link(email, key, portal_url):
             + _button(link, "View my submissions") +
             f"<p style=\"font-size:12px;color:#777\">The link works for {history.LINK_VALID_DAYS} days. "
             f"If you didn't ask for it, you can ignore this email.</p>")
-        sent, message = send_client_email(email, "Your submissions link", body)
+        sent, message = send_client_email(email, f"{APP_NAME}: your submissions link", body)
         logger.info(f"History link email: sent={sent} - {message}")
     except Exception as e:
         logger.warning(f"History link email failed: {e}")
@@ -1439,11 +1452,11 @@ def admin_submissions():
         return "Not found.", 404
     if not _admin_ok():
         return render_template("admin_login.html", wrong=bool(request.values.get("key")),
-                               action=url_for("admin_submissions"), version=VERSION)
+                               action=url_for("admin_submissions"), version=VERSION, app_name=APP_NAME)
     key = request.values["key"]
     if not history.is_enabled():
         return render_template("admin_submissions.html", key=key, storage_missing=True, rows=[], q="",
-                               kind="", total=0, page=1, pages=1, version=VERSION)
+                               kind="", total=0, page=1, pages=1, version=VERSION, app_name=APP_NAME)
     q = (request.args.get("q") or "").strip()
     kind = request.args.get("kind") or ""
     try:
@@ -1471,7 +1484,7 @@ def admin_submissions():
         rows.append(dict(r, status_label=ADMIN_STATUS_LABELS.get(r.get("status"), r.get("status") or "?"),
                          created=(r.get("created_at") or "")[:16].replace("T", " ")))
     return render_template("admin_submissions.html", key=key, storage_missing=False, rows=rows, q=q, kind=kind,
-                           total=len(records), page=page, pages=pages, version=VERSION)
+                           total=len(records), page=page, pages=pages, version=VERSION, app_name=APP_NAME)
 
 
 @app.route("/admin/submissions/report")
