@@ -1,0 +1,149 @@
+<html><head><meta charset="utf-8"><style>
+      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; color: #1C0072; background: #FFF8F2; margin: 0; padding: 0;
+             line-height: 1.55; }
+      .fp-bar { background: #1C0072; color: #fff; padding: 15px 20px; }
+      .fp-bar .fp-wm { font-size: 20px; font-weight: bold; letter-spacing: -0.02em; }
+      .fp-bar .fp-wm span { color: #FFA125; }
+      .fp-bar .fp-en { font-size: 10px; font-weight: bold; color: #B9AEE6; padding-top: 1px; }
+      .fp-bar .fp-ref { float: right; font-family: Consolas, Menlo, monospace; font-size: 13px; color: #FFA125; }
+      .fp-body { max-width: 1040px; margin: 0 auto; padding: 18px 20px 30px; }
+      h2 { font-size: 22px; letter-spacing: -0.02em; color: #1C0072; margin: 0 0 12px; }
+      h3 { color: #1C0072; margin-top: 0; }
+      h4 { color: #1C0072; }
+      a { color: #C2410C; }
+      table { border-collapse: collapse; width: 100%; font-size: 13px; margin-bottom: 24px;
+              background: #fff; }
+      th, td { border: 1px solid #F0E2D6; padding: 7px 9px; text-align: left; }
+      th { background: #1C0072; color: #fff; text-transform: uppercase; letter-spacing: 0.09em;
+           font-size: 11px; }
+      tr.flagged { background: #FFF4E7; }
+      tr.nonstandard-summary { background: #FFF4E7; }
+      tr.nonstandard-sub { background: #FFFBF5; color: #6B6480; }
+      tr.subtotal { background: #F4EFFA; }
+      tr.grandtotal { background: #1C0072; color: #fff; }
+      tr.grandtotal b { color: #fff; }
+      .summary { margin-bottom: 16px; }
+      .badge { display:inline-block; background:#C2410C; color:#fff; padding:2px 9px;
+               border-radius:999px; font-size:12px; }
+      .badge.grey { background:#6B6480; }
+      .qty { font-family: Consolas, Menlo, monospace; font-weight: bold; text-align: right; }
+      .tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 2px solid #1C0072; margin: 18px 0 0; }
+      .tab-btn {
+        font: inherit; font-size: 14px; padding: 9px 16px; cursor: pointer; color: #1C0072;
+        background: #F7F1EB; border: 1px solid #F0E2D6; border-bottom: none;
+        border-radius: 8px 8px 0 0; margin-bottom: -2px;
+      }
+      .tab-btn:hover { background: #F1E8E0; }
+      .tab-btn.active { background: #1C0072; color: #fff; border-color: #1C0072; font-weight: bold; }
+      .tab-panels { border: 1px solid #F0E2D6; border-top: none; border-radius: 0 0 8px 8px;
+                    padding: 16px; background: #fff; }
+      .tab-panel { display: none; }
+      .tab-panel.active { display: block; max-height: 74vh; overflow: auto; }
+      .tab-panel > table { margin-bottom: 0; }
+      .tree summary::-webkit-details-marker { color: #6B6480; }
+    </style></head><body>
+    <div class="fp-bar"><span class="fp-ref">FP-24428</span><div class="fp-wm">Flight<span>path</span></div><div class="fp-en">by iPrintManage</div></div>
+    <div class="fp-body">
+    <h2>Flightpath page count - ref FP-24428</h2>
+    
+    <p style="background:#EAF8FE;border:1px solid #B3E3F6;padding:10px 14px;border-radius:8px;color:#1c5a80">This is a self-service page count only &ndash; nothing has been sent to us, and your files were deleted as soon as they'd been counted.</p>
+    
+        <h3>Client details</h3>
+        <table style="max-width:480px">
+          <tr><td><b>Subject</b></td><td>Archway campus</td></tr><tr><td><b>Name</b></td><td>Jane Doe</td></tr><tr><td><b>Company</b></td><td>Acme Ltd</td></tr><tr><td><b>Email</b></td><td>Jane@Acme.com</td></tr><tr><td><b>Phone</b></td><td>0711</td></tr>
+        </table>
+        
+    <div class="summary">
+      <p>Received: 2026-10-06 15:11</p>
+      <table style="width:auto;margin:8px 0 14px"><tr><td style="border:1px solid #F0E2D6;background:#FDEDE1;padding:11px 14px;text-align:center;vertical-align:top"><div style="font-size:12px;color:#6B6480">Pages / items</div><div style="font-size:23px;font-weight:bold;color:#1C0072">3</div></td><td style="border:1px solid #F0E2D6;background:#FDEDE1;padding:11px 14px;text-align:center;vertical-align:top"><div style="font-size:12px;color:#6B6480">Sheets of paper</div><div style="font-size:23px;font-weight:bold;color:#1C0072">3</div><div style="font-size:11px;color:#6B6480;margin-top:2px">estimate</div></td><td style="border:1px solid #F0E2D6;background:#FDEDE1;padding:11px 14px;text-align:center;vertical-align:top"><div style="font-size:12px;color:#6B6480">Folders</div><div style="font-size:23px;font-weight:bold;color:#1C0072">1</div><div style="font-size:11px;color:#6B6480;margin-top:2px">380 sheets per folder</div></td><td style="border:1px solid #F0E2D6;background:#FDEDE1;padding:11px 14px;text-align:center;vertical-align:top"><div style="font-size:12px;color:#6B6480">Tabs</div><div style="font-size:23px;font-weight:bold;color:#1C0072">0</div><div style="font-size:11px;color:#6B6480;margin-top:2px">one per folder</div></td><td style="border:1px solid #F0E2D6;background:#FDEDE1;padding:11px 14px;text-align:center;vertical-align:top"><div style="font-size:12px;color:#6B6480">Dividers</div><div style="font-size:23px;font-weight:bold;color:#1C0072">3</div><div style="font-size:11px;color:#6B6480;margin-top:2px">one per document</div></td><td style="border:1px solid #F0E2D6;background:#FDEDE1;padding:11px 14px;text-align:center;vertical-align:top"><div style="font-size:12px;color:#6B6480">Files</div><div style="font-size:23px;font-weight:bold;color:#1C0072">3</div></td></tr></table><p style="font-size:12px;color:#6B6480;margin:0 0 8px">Sheets of paper: A4 and smaller (US Letter counts as A4) printed double-sided, larger sizes single-sided. &nbsp;<span class="badge">1 need a decision</span></p>
+      <p><b>Client note:</b> note</p>
+      
+    </div>
+
+    <div class="tabs"><button type="button" class="tab-btn active" data-panel="panel-0">As per the Standard</button><button type="button" class="tab-btn" data-panel="panel-1">Quantity by size</button><button type="button" class="tab-btn" data-panel="panel-2">Suggested scaling</button><button type="button" class="tab-btn" data-panel="panel-3">Full breakdown</button></div><div class="tab-panels"><div class="tab-panel active" id="panel-0"><p style="font-size:12px;color:#6B6480;margin:0 0 8px">What we would produce from these files, the way planning sets are always made up. The totals above count what's in the files; this is the job.</p><table><tr><th>In the binders</th><th>Pages</th><th>Sheets</th><th></th></tr><tr><td>A4 and smaller, printed double-sided</td><td class="qty">1</td><td class="qty">1</td><td style="font-size:12px;color:#6B6480">two pages to a sheet, within each document</td></tr><tr><td>Larger formats, folded to keep their scale</td><td class="qty">2</td><td class="qty">2</td><td style="font-size:12px;color:#6B6480">one page to a sheet</td></tr><tr class="subtotal"><td><b>Into binders</b></td><td class="qty">3</td><td class="qty">3</td><td style="font-size:12px;color:#6B6480">1 binder at 380 sheets each, 0 tabs, 3 dividers</td></tr></table><p style="font-size:13px;color:#555">No design and access statement or non-technical summary spotted in this job, so everything goes into the binders.</p><h4 style="margin:18px 0 6px;color:#1C0072">Before we print</h4><ul style="font-size:14px;margin:0;padding-left:20px"><li><b>1</b> item(s) need a decision - odd sizes, unreadable files and estimated sizes. See Suggested scaling.</li></ul></div><div class="tab-panel" id="panel-1"><table>
+      <tr><th>Size</th><th>Quantity</th><th>Flag</th></tr>
+      <tr>
+            <td>A4</td>
+            <td class="qty">1</td>
+            <td></td>
+        </tr><tr>
+            <td>1000 RB</td>
+            <td class="qty">1</td>
+            <td></td>
+        </tr><tr class="nonstandard-summary">
+            <td>Non-standard (total)</td>
+            <td class="qty">1</td>
+            <td>&#9888; REVIEW</td>
+        </tr><tr class="nonstandard-sub">
+            <td style="padding-left:28px">100 × 150 mm</td>
+            <td class="qty">1</td>
+            <td></td>
+        </tr>
+    </table></div><div class="tab-panel" id="panel-2"><p style="font-size:12px;color:#6B6480;margin:0 0 8px">Sizes that don't match a recognised size, and what would fit them, with a subtotal for each suggestion. Shown on its own, not counted into the totals above.</p><table><tr><th>Suggestion</th><th>Size</th><th>Quantity</th></tr><tr><td>Scale up to A4</td><td>100 × 150 mm</td><td class="qty">1</td></tr><tr class="subtotal"><td><b>Scale up to A4 &ndash; subtotal</b></td><td>1 size</td><td class="qty">1</td></tr><tr class="grandtotal"><td><b>All odd sizes</b></td><td>1 size</td><td class="qty">1</td></tr></table></div><div class="tab-panel" id="panel-3"><table>
+      <tr><th>File</th><th>Location</th><th>Type</th><th>Item</th><th>Width (mm)</th><th>Height (mm)</th>
+          <th>Matched size</th><th>Flag</th><th>Notes</th></tr>
+      <tr>
+            <td>a4.pdf</td>
+            <td></td>
+            <td>PDF</td>
+            <td>Page 1</td>
+            <td>210.0</td>
+            <td>297.0</td>
+            <td>A4</td>
+            <td></td>
+            <td></td>
+        </tr><tr class="flagged">
+            <td>odd.pdf</td>
+            <td></td>
+            <td>PDF</td>
+            <td>Page 1</td>
+            <td>100.0</td>
+            <td>150.0</td>
+            <td>Non-standard</td>
+            <td>&#9888; REVIEW</td>
+            <td>Non-standard page size for a PDF page.</td>
+        </tr><tr>
+            <td>banner.pdf</td>
+            <td></td>
+            <td>PDF</td>
+            <td>Page 1</td>
+            <td>1075.0</td>
+            <td>2100.0</td>
+            <td>1000 RB</td>
+            <td></td>
+            <td></td>
+        </tr>
+    </table></div></div>
+    <script>
+      (function () {
+        var buttons = Array.prototype.slice.call(document.querySelectorAll('.tab-btn'));
+        var panels = Array.prototype.slice.call(document.querySelectorAll('.tab-panel'));
+        function show(id) {
+          var found = false;
+          buttons.forEach(function (b) {
+            var on = b.getAttribute('data-panel') === id;
+            b.className = on ? 'tab-btn active' : 'tab-btn';
+            if (on) { found = true; }
+          });
+          panels.forEach(function (p) {
+            p.className = (p.id === id) ? 'tab-panel active' : 'tab-panel';
+          });
+          if (found) { try { sessionStorage.setItem('portalReportTab', id); } catch (e) {} }
+          return found;
+        }
+        buttons.forEach(function (b) {
+          b.addEventListener('click', function () { show(b.getAttribute('data-panel')); });
+        });
+        var saved = null;
+        try { saved = sessionStorage.getItem('portalReportTab'); } catch (e) {}
+        if (saved) { show(saved); }
+      })();
+    </script>
+    
+    <p style="margin-top:16px;font-size:12px;color:#6B6480">
+      Flightpath V2.0. Full-size estimates for images and unformatted spreadsheets are approximations - see the
+      accompanying README for details.
+      Files used for this page count were analysed and then deleted immediately - nothing was kept.
+    </p>
+    </div>
+    </body></html>
