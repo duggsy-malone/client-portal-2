@@ -1,25 +1,70 @@
-PAGE COUNTER - desktop version
-==============================
+PAGE COUNTER - the desktop version
+==================================
 
-Counts pages and checks page sizes for PDFs, images, PowerPoint, Excel and ZIPs,
-exactly like the website's "just count my pages" option - but on this computer.
-Nothing is uploaded anywhere, and there's no size limit.
+Counts pages and checks page sizes for PDFs, images, PowerPoint, Excel and
+ZIPs - exactly like the portal's "just count my pages" option, but on this
+computer. Nothing is uploaded anywhere and there is no size limit.
+
+It shares its working parts with the website: the same counting, the same
+report, the same look. A count here and a count on the portal agree.
+
 
 MAC
+---
 1. Put this "Page Counter" folder somewhere permanent, e.g. Documents.
 2. Double-click "Page Counter.command".
    - The first time, macOS may say it "can't be opened because it is from an
      unidentified developer". If so: right-click (or Control-click) the file,
      choose Open, then click Open again. You only need to do this once.
-   - The first run takes a minute or two to set up (needs internet).
+   - The first run takes a minute or two to set itself up (needs internet).
      After that it starts in a few seconds.
 3. Page Counter opens in your web browser. Drop in files or folders, press
-   Count pages, and the report opens in a new tab. "Save as spreadsheet" gives
-   you the same figures as a CSV for Excel.
+   Count pages, and the report opens in a new tab.
 4. To stop it, close the Terminal window.
 
 If it says it needs Python 3: install it from https://www.python.org/downloads/
 then double-click Page Counter again.
 
 WINDOWS
-Same as above, but double-click "Page Counter.bat".
+-------
+The same, but double-click "Page Counter.bat". If Windows asks about Python,
+install it from python.org and tick "Add Python to PATH" during setup.
+
+
+WHAT YOU GET
+------------
+- The same report as the portal, with every tab: As per the Standard,
+  spreadsheets, quantity by size, sizes by section, suggested scaling,
+  possible duplicates, folder structure and the full breakdown.
+- Tabs, dividers and the folder diagram, as long as you drop in a FOLDER
+  (or use "Choose a folder"). Dropping loose files can't show structure,
+  because the folders aren't there to see.
+- Design and access statements and non-technical summaries recognised and
+  listed separately, wiro bound, out of the binder count but still tabbed.
+- "Plans printed to scale" if you tick it, which changes the sheet figures
+  the same way it does on the portal.
+- "Save as spreadsheet (CSV)" for the same figures in Excel.
+
+
+GOOD TO KNOW
+------------
+- Each file is copied to a temporary folder, counted, and that copy deleted
+  before the next one starts - so a 20 GB job doesn't need 20 GB of spare
+  space, and nothing is left behind afterwards.
+- It listens on this computer only (127.0.0.1). Nobody else on the network,
+  or anywhere else, can reach it.
+- ZIPs are opened one file at a time, so a big archive won't fill the disk.
+- It needs the internet only on the first run (to set itself up) and for the
+  fonts. With no internet it still works - the pages just use your computer's
+  own typefaces instead of Work Sans.
+- There is no size limit, but very large jobs take a while: it is doing the
+  same work as the portal, on one computer.
+
+
+IF SOMETHING GOES WRONG
+-----------------------
+- "Couldn't reach Page Counter" in the browser: the Terminal/Command Prompt
+  window has been closed. Start it again.
+- The report didn't open: your browser blocked the pop-up. Use the
+  "Open report again" button.
+- Anything else: send Claude a screenshot of the Terminal window.
