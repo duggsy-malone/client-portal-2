@@ -1,0 +1,60 @@
+FLIGHTPATH BRANDING FILES
+=========================
+
+These are drawn from the Flight Path brand guide v1.0 (September 2026).
+Colours, fonts and wording live in branding.py, one folder up; the shared
+styling lives in flightpath.css in this folder.
+
+A note on the wordmark: it is NOT an image. "Flightpath" is set as live text
+in Work Sans on every page, two-tone, with "by iPrintManage" under it. That
+keeps it sharp at any size and lets it reflow on a phone. Only the square
+tile below is a picture. If you ever want the wordmark as artwork instead,
+say so and I'll swap it for an SVG.
+
+mark.svg          The orange tile: the dotted take-off trail and the folded
+                  paper dart. Drawn at 64 x 64 and scaled, so it stays sharp.
+                  Used in the page header, the admin pages and the favicon.
+
+mark-navy.svg     The same tile in Night Navy with a Beacon dart, for when
+                  orange is already busy (guide page 2).
+
+mark-mono.svg     Single colour, for stamps, fax sheets and one-colour print.
+
+dart.svg          The loose dart and trail with no tile, for hero areas. The
+                  trail is orange, because this one sits on white or Paper.
+
+dart-on-navy.svg  The same, with a Beacon dart and a white trail, for use on
+                  a navy panel.
+
+favicon.png       The square mark for the browser tab. 512 x 512.
+favicon.ico       The same at 16 / 32 / 48 / 64 / 128 / 256, which is what
+                  browsers actually ask for. Both are generated from mark.svg
+                  rather than drawn by hand - ask me and I'll regenerate them.
+
+apple-touch-icon.png
+                  180 x 180, for when someone saves the portal to a phone
+                  home screen.
+
+mark-transparent.png
+                  512 x 512 dart and trail on a transparent background, with
+                  no tile, for putting on top of something else.
+
+flightpath.css    The skin every page shares: Paper background, the navy
+                  departures board, orange buttons with navy text, the status
+                  pills, the Barlow Condensed labels and the mono figures. It
+                  reads its colours from branding.py, so edit them there and
+                  not here.
+
+NOT IN THIS FOLDER
+------------------
+The email header. Mail programs won't load an image from a page's own files,
+so it needs a public web address. Emails already carry a navy header bar with
+the wordmark set as text, which works even with images turned off, so this is
+optional. If you want an image instead: make it 1200 x 200, host it anywhere
+public (the R2 bucket is fine) and paste the link into EMAIL_HEADER_URL in
+branding.py.
+
+The fonts. Work Sans, Barlow Condensed and JetBrains Mono are loaded from
+Google Fonts by the pages themselves - nothing to install. If a client's
+network blocks Google Fonts, the pages fall back to their system sans and
+everything still lines up.

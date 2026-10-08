@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"
+     width="64" height="64" role="img" aria-label="Flight Path">
+  <rect width="64" height="64" rx="14" fill="#1C0072"/>
+  <circle cx="31.5" cy="38.5" r="2.7" fill="#FFFFFF"/><circle cx="26.4" cy="43.3" r="2.5" fill="#FFFFFF"/><circle cx="21.3" cy="48.1" r="2.2" fill="#FFFFFF"/><circle cx="16.2" cy="52.9" r="1.9" fill="#FFFFFF"/><circle cx="11.4" cy="57.4" r="1.5" fill="#FFFFFF"/>
+  <polygon points="56,10 27,24 36,33" fill="#FFC46B"/>
+  <polygon points="56,10 36,33 40,44" fill="#FFA125"/>
+</svg>
