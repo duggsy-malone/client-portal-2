@@ -127,25 +127,34 @@ REASSURANCE = ("Your files are used only to prepare your quote, are stored secur
                "deleted once the job has been passed on.")
 
 # Who to chase. Plain text, one item per line - shown on the client pages.
+# Taken from iprintmanage.com, so they match what clients see on the main site.
 CONTACT_LINES = [
     "iPrintManage",
+    "7 Bell Yard, London, WC2A 2JR",
+    "Telephone: 020 7126 8454",
     "sales@iprintmanage.com",
-    "Telephone: [add your number]",
-    "Monday to Friday, 9am to 5.30pm",
 ]
 
-# The small print at the very bottom. Blank lines are ignored.
+# The small print at the very bottom. Blank lines are ignored, so a line that
+# isn't ready can simply be left out rather than showing a gap.
+#
+# The company number and VAT number aren't on iprintmanage.com, so they aren't
+# guessed at here - send them over and they go back in, one line each. (A UK
+# limited company is generally required to show its registered name, number
+# and registered office on its websites, so they're worth adding.)
+# Left empty for now: with only the trading name in it, this block just said
+# "iPrintManage" a third time under the contact details.
 FOOTER_LEGAL = [
-    "[Company name] Limited",
-    "Registered in England & Wales, company number [number]",
-    "VAT registration number [number]",
+    # "iPrintManage Limited",
+    # "Registered in England & Wales, company number 00000000",
+    # "VAT registration number GB000000000",
 ]
 
 # Optional links shown next to the footer. (label, url)
 FOOTER_LINKS = [
     ("How we produce planning sets", "/standard"),
-    # ("Terms", "https://iprintmanage.com/terms/"),
-    # ("Privacy", "https://iprintmanage.com/privacy/"),
+    ("Terms", "https://iprintmanage.com/terms-conditions/"),
+    ("Privacy", "https://iprintmanage.com/privacy-policy/"),
 ]
 
 
