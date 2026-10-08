@@ -1,205 +1,145 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{{ app_name }} - send us your files</title>
-<style>
-  :root { --brand: #2c3e50; --accent: #2980b9; }
-  * { box-sizing: border-box; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
-    background: #f4f6f8; margin: 0; padding: 0; color: #222;
-  }
-  .wrap { max-width: 640px; margin: 40px auto; padding: 0 16px; }
-  h1 { color: var(--brand); font-size: 1.6rem; margin-bottom: 4px; }
-  p.lede { color: #555; margin-top: 0; }
-  .dropzone {
-    border: 2px dashed #b0bec5; border-radius: 12px; background: #fff;
-    padding: 48px 24px; text-align: center; cursor: pointer; transition: all .15s ease;
-  }
-  .dropzone.dragover { border-color: var(--accent); background: #eaf3fa; }
-  .dropzone p { margin: 8px 0; color: #607d8b; }
-  .dropzone .icon { font-size: 40px; }
-  input[type=file] { display: none; }
-  .filelist { margin-top: 16px; }
-  .fileitem {
-    display: flex; justify-content: space-between; align-items: center;
-    background: #fff; border: 1px solid #e0e0e0; border-radius: 8px;
-    padding: 10px 14px; margin-bottom: 8px; font-size: 14px;
-  }
-  .fileitem .remove { color: #c0392b; cursor: pointer; font-weight: bold; }
-  textarea {
-    width: 100%; margin-top: 16px; border-radius: 8px; border: 1px solid #ccc;
-    padding: 10px; font-family: inherit; resize: vertical; min-height: 70px;
-  }
-  button.submit {
-    margin-top: 16px; width: 100%; padding: 14px; border: none; border-radius: 8px;
-    background: var(--accent); color: #fff; font-size: 16px; cursor: pointer;
-  }
-  button.submit:disabled { background: #b0bec5; cursor: not-allowed; }
-  .status { margin-top: 16px; font-size: 14px; }
-  .status.error { color: #c0392b; }
-  .status.success { background: #e8f8ef; border: 1px solid #b7e4c7; padding: 16px; border-radius: 8px; color: #1e6b3c; }
-  .note { font-size: 12px; color: #90a4ae; margin-top: 24px; }
-  progress {
-    width: 100%; height: 10px; margin-top: 12px; border: none; border-radius: 5px;
-    -webkit-appearance: none; appearance: none; background: #e3e8ec; overflow: hidden;
-  }
-  progress::-webkit-progress-bar { background: #e3e8ec; border-radius: 5px; }
-  progress::-webkit-progress-value { background: var(--accent); border-radius: 5px; }
-  progress::-moz-progress-bar { background: var(--accent); border-radius: 5px; }
-  /* No percentage available yet: a highlight that sweeps across instead. */
-  progress:indeterminate {
-    background: linear-gradient(90deg, #e3e8ec 0%, #e3e8ec 30%, var(--accent) 50%, #e3e8ec 70%, #e3e8ec 100%);
-    background-size: 250% 100%;
-    animation: progress-sweep 1.3s linear infinite;
-  }
-  progress:indeterminate::-webkit-progress-bar { background: transparent; }
-  progress:indeterminate::-moz-progress-bar { background: transparent; }
-  @keyframes progress-sweep { from { background-position: 100% 0; } to { background-position: 0% 0; } }
-
-  .fields { background: #fff; border: 1px solid #e0e0e0; border-radius: 12px; padding: 20px; margin-top: 20px; }
-  .fields h2 { font-size: 1.05rem; color: var(--brand); margin: 0 0 14px; }
-  .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-  @media (max-width: 520px) { .field-grid { grid-template-columns: 1fr; } }
-  .field { display: flex; flex-direction: column; font-size: 13px; color: #455a64; }
-  .field.full { grid-column: 1 / -1; }
-  .field span.req { color: #c0392b; margin-left: 2px; }
-  .field input, .field textarea {
-    margin-top: 6px; border-radius: 8px; border: 1px solid #ccc; padding: 9px 10px;
-    font-family: inherit; font-size: 14px;
-  }
-  .field textarea { resize: vertical; min-height: 44px; }
-  .count-only-toggle {
-    display: flex; align-items: flex-start; gap: 10px; margin-top: 18px;
-    background: #eaf3fa; border: 1px solid #b8d9ec; border-radius: 8px; padding: 12px 14px;
-    font-size: 13px; color: #1c5a80; cursor: pointer;
-  }
-  .count-only-toggle input { margin-top: 2px; }
-  .fileitem .info { min-width: 0; overflow-wrap: anywhere; }
-  .fileitem .warn { display: block; margin-top: 4px; font-size: 12px; color: #8a5a00; }
-  .fileitem.suspicious { border-color: #f3d27a; background: #fffbef; }
-  .confirm-files {
-    display: flex; align-items: flex-start; gap: 10px; margin-top: 4px;
-    background: #fff8e6; border: 1px solid #f3d27a; border-radius: 8px; padding: 12px 14px;
-    font-size: 14px; color: #5c4400; cursor: pointer;
-  }
-  .confirm-files input { margin-top: 3px; width: 16px; height: 16px; flex: none; }
-  .confirm-files.ticked { background: #e8f8ef; border-color: #b7e4c7; color: #1e6b3c; }
-  .popup-note {
-    margin-top: 8px; font-size: 13px; color: #1c5a80; background: #eaf3fa;
-    border: 1px solid #b8d9ec; border-radius: 8px; padding: 10px 14px;
-  }
-  .plans-box {
-    display: flex; align-items: center; gap: 14px; margin-top: 18px;
-    background: #fff4d6; border: 3px solid #f39c12; border-radius: 10px; padding: 16px 18px;
-    cursor: pointer; box-shadow: 0 2px 0 rgba(243,156,18,.25);
-  }
-  .plans-box input { width: 24px; height: 24px; flex: none; accent-color: #1e3a5f; cursor: pointer; }
-  .plans-box .plans-title { display: block; font-size: 18px; font-weight: 800; letter-spacing: .02em; color: #7a4a00; }
-  .plans-box .plans-sub { display: block; font-size: 13px; color: #6b4b12; margin-top: 3px; }
-  .plans-box.ticked { background: #e7eef7; border-color: #1e3a5f; }
-  .plans-box.ticked .plans-title { color: #1e3a5f; }
-  .plans-box.ticked .plans-sub { color: #33506f; }
-  .files-added { margin-top: 10px; font-size: 14px; color: #1e6b3c; background: #e8f8ef; border: 1px solid #b7e4c7; border-radius: 8px; padding: 9px 14px; }
-  .files-added a { color: #1e6b3c; font-weight: 600; }
-  .list-heading { font-size: 1.05rem; color: var(--brand); margin: 26px 0 0; }
-  .submit-hint { font-size: 12px; color: #78909c; text-align: center; margin-top: 6px; }
-  .toplink { text-align: right; font-size: 14px; margin: 0; }
-  .brand { font-size: 1.1rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
-           color: var(--brand); margin: 0 0 2px; }
-  .toplink a, .status a { color: var(--accent); }
-  button.open-report {
-    margin-top: 12px; padding: 10px 16px; border: none; border-radius: 8px;
-    background: #1e6b3c; color: #fff; font-size: 15px; cursor: pointer;
-  }
-</style>
+{% include '_head.html' %}
+<title>{{ brand.page_title }} - {{ app_name }}</title>
 </head>
 <body>
-<div class="wrap">
-  <p class="toplink"><a href="/my-submissions">My submissions</a></p>
-  <p class="brand">&#9992; {{ app_name }}</p>
-  <h1>Send us your files for a quote</h1>
-  <p class="lede">Drop your PDF, JPG, ZIP, PowerPoint or Excel files below and we'll get back to you with a quote.</p>
+<div class="fp-shell">
+  {% set nav_active = 'checkin' %}{% include '_header.html' %}
 
-  <div class="dropzone" id="dropzone">
-    <div class="icon">&#128193;</div>
-    <p><strong>Drag &amp; drop files or folders here</strong>, or click to browse</p>
-    <p style="font-size:13px"><a href="#" id="chooseFolder">Choose a whole folder instead</a></p>
-    <p style="font-size:12px">Any file type &middot; up to 5GB total &middot; page counts for PDF, JPG, PNG, ZIP, PowerPoint &amp; Excel</p>
-    <input type="file" id="fileInput" multiple>
-    <input type="file" id="folderInput" webkitdirectory directory multiple>
+  <div class="fp-cols">
+    <div class="fp-stack">
+
+      <div class="fp-checkin" id="dropzone">
+        <img class="fp-checkin__dart" src="{{ url_for('static', filename=brand.dart) }}" alt="" aria-hidden="true">
+        <div class="fp-checkin__body">
+          <h1>{{ brand.page_title }}</h1>
+          <p class="fp-lede">{{ brand.drop_zone }}</p>
+          <div class="fp-btn-row">
+            <button type="button" class="fp-btn" id="chooseFiles">{{ brand.drop_button }}</button>
+            <button type="button" class="fp-btn fp-btn--ghost" id="chooseFolder">{{ brand.drop_button_folder }}</button>
+            <button type="button" class="fp-btn fp-btn--ghost" id="clearBoard" style="display:none">{{ brand.clear_button }}</button>
+          </div>
+          <p class="fp-mono fp-small fp-muted" style="margin:0">{{ brand.accepted_line }}</p>
+        </div>
+        <input type="file" id="fileInput" multiple>
+        <input type="file" id="folderInput" webkitdirectory directory multiple>
+      </div>
+
+      <div class="fp-note fp-note--ok" id="filesAdded" style="display:none"></div>
+    </div>
+
+    <aside class="fp-card fp-sticky">
+      <span class="fp-label">{{ brand.batch_title }}</span>
+      <div class="fp-tiles">
+        <div class="fp-tile">
+          <div class="fp-tile__value" id="tileFiles">0</div>
+          <div class="fp-tile__label">files</div>
+        </div>
+        <div class="fp-tile">
+          <div class="fp-tile__value" id="tileSize">0</div>
+          <div class="fp-tile__label">to send</div>
+        </div>
+      </div>
+      <div class="fp-chips" id="typeChips"></div>
+      <p class="fp-small fp-muted" style="margin:14px 0 0">Page counts and sizes come back in your
+        report once your files have arrived.</p>
+    </aside>
   </div>
 
-  <div class="files-added" id="filesAdded" style="display:none"></div>
-
-  <div class="fields">
-    <h2>Your details</h2>
-    <div class="field-grid">
-      <label class="field">Subject<span class="req">*</span>
+  <div class="fp-card" style="margin-top:18px">
+    <span class="fp-label">Your details</span>
+    <div class="fp-grid">
+      <label class="fp-field">Subject<span class="fp-req">*</span>
         <input type="text" id="subject">
       </label>
-      <label class="field">Full name<span class="req">*</span>
+      <label class="fp-field">Full name<span class="fp-req">*</span>
         <input type="text" id="fullName">
       </label>
-      <label class="field">Company<span class="req">*</span>
+      <label class="fp-field">Company<span class="fp-req">*</span>
         <input type="text" id="company">
       </label>
-      <label class="field">Email<span class="req">*</span>
+      <label class="fp-field">Email<span class="fp-req">*</span>
         <input type="email" id="email">
       </label>
-      <label class="field">Phone number<span class="req">*</span>
+      <label class="fp-field">Phone number<span class="fp-req">*</span>
         <input type="tel" id="phone">
       </label>
-      <label class="field" id="deadlineField">Deadline<span class="req">*</span>
+      <label class="fp-field" id="deadlineField">Deadline<span class="fp-req">*</span>
         <input type="date" id="deadline">
       </label>
-      <label class="field full" id="addressField">Delivery address<span class="req">*</span>
+      <label class="fp-field fp-full" id="addressField">Delivery address<span class="fp-req">*</span>
         <textarea id="deliveryAddress"></textarea>
+      </label>
+      <label class="fp-field fp-full">Anything we should know about this job?
+        <textarea id="clientNote" placeholder="Optional - deadlines, finishing, anything unusual"></textarea>
       </label>
     </div>
   </div>
 
-  <label class="count-only-toggle">
+  <label class="fp-tick fp-tick--info" style="margin-top:16px">
     <input type="checkbox" id="countOnly">
-    <span>I just want to count my pages &ndash; don't send this off for a quote, just show me a report. (Deadline and delivery address won't be needed.)</span>
+    <span>I just want to count my pages &ndash; don't send this off for a quote, just show me a report.
+      (Deadline and delivery address won't be needed.)</span>
   </label>
 
-  <textarea id="clientNote" placeholder="Anything we should know about this job? (optional)"></textarea>
-
-  <label class="plans-box" id="plansBox">
+  <label class="fp-scale" id="plansBox" style="margin-top:16px">
     <input type="checkbox" id="plansToScale">
-    <span class="plans-text"><span class="plans-title">&#128208; PLANS PRINTED TO SCALE</span>
-      <span class="plans-sub">If left unticked, plans will be printed to <b>A3 and folded</b>. This affects your quote.</span></span>
+    <span>
+      <span class="fp-scale__title">Plans printed to scale</span>
+      <span class="fp-scale__sub">If left unticked, plans will be printed to <b>A3 and folded</b>.
+        This affects your quote.</span>
+    </span>
   </label>
 
-  <h2 class="list-heading" id="listHeading" style="display:none">Your files</h2>
-  <div class="filelist" id="filelist"></div>
-  <label class="confirm-files" id="confirmFilesWrap" style="display:none">
+  <section class="fp-board" id="board" style="margin-top:20px">
+    <div class="fp-board__head">
+      <span class="fp-label fp-label--onnavy">{{ brand.board_title }}</span>
+      <span class="fp-board__clock" id="boardClock"></span>
+    </div>
+    <div class="fp-board__empty" id="boardEmpty">{{ brand.empty_board }}</div>
+    <table id="boardTable" style="display:none">
+      <thead>
+        <tr><th>File</th><th>Size</th><th>Status</th><th><span class="fp-sr">Remove</span></th></tr>
+      </thead>
+      <tbody id="boardBody"></tbody>
+    </table>
+    <div class="fp-board__note" id="boardNote" style="display:none"></div>
+    <div class="fp-board__foot">Your files go straight to secure storage, then every page is counted
+      and every size measured.</div>
+  </section>
+
+  <label class="fp-tick" id="confirmFilesWrap" style="display:none;margin-top:14px">
     <input type="checkbox" id="confirmFiles">
-    <span><b>I've checked my file list and I can see all of my files present.</b><br>
-      <span style="font-size:12px">Please look through the list above before you submit &ndash; only the files listed will be sent.</span></span>
+    <span><b>I've checked the departures board and I can see all of my files.</b><br>
+      <span class="fp-small">Only the files listed above will be sent.</span></span>
   </label>
-  <div class="popup-note" id="popupNote" style="display:none">
-    <b>Heads up:</b> your report will open in a new tab. If your browser blocks pop-ups, please allow them for this site
-    &ndash; or use the &ldquo;Open my report&rdquo; button that appears when it's ready.
+
+  <div class="fp-note" id="popupNote" style="display:none;margin-top:14px">
+    <b>Heads up:</b> your report will open in a new tab. If your browser blocks pop-ups, please allow
+    them for this site &ndash; or use the &ldquo;Open my report&rdquo; button that appears when it's ready.
   </div>
 
+  <div class="fp-card" style="margin-top:16px">
+    <span class="fp-label">{{ brand.send_title }}</span>
+    <button type="button" class="fp-btn fp-btn--lg fp-btn--block" id="submitBtn" disabled>{{ brand.primary_action }}</button>
+    <div class="fp-hint" id="submitHint" style="display:none"></div>
+    <progress class="fp-progress" id="progressBar" value="0" max="100" style="display:none"></progress>
+    <div id="status"></div>
+  </div>
 
-  <button class="submit" id="submitBtn" disabled>Submit for quote</button>
-  <div class="submit-hint" id="submitHint" style="display:none"></div>
-  <progress id="progressBar" value="0" max="100" style="display:none"></progress>
-  <div id="status"></div>
+  <div class="fp-card fp-card--tight" style="margin-top:16px">
+    <b>Need a hand?</b> {{ brand.need_a_hand }}
+  </div>
 
-  <p class="note">Files are used only to prepare your quote and are stored securely for a limited time.
-    <br>{{ app_name }} V{{ version }}</p>
+  <p class="fp-small fp-muted" style="margin-top:18px">{{ brand.reassurance }}</p>
+  {% include '_footer.html' %}
 </div>
 
 <script>
 const dropzone = document.getElementById('dropzone');
 const fileInput = document.getElementById('fileInput');
-const filelistEl = document.getElementById('filelist');
 const submitBtn = document.getElementById('submitBtn');
 const statusEl = document.getElementById('status');
 const progressBar = document.getElementById('progressBar');
@@ -211,8 +151,21 @@ const submitHintEl = document.getElementById('submitHint');
 const plansBoxEl = document.getElementById('plansBox');
 const plansToScaleEl = document.getElementById('plansToScale');
 const filesAddedEl = document.getElementById('filesAdded');
-const listHeadingEl = document.getElementById('listHeading');
-plansToScaleEl.addEventListener('change', () => plansBoxEl.classList.toggle('ticked', plansToScaleEl.checked));
+
+// The departures board.
+const boardBody = document.getElementById('boardBody');
+const boardTable = document.getElementById('boardTable');
+const boardEmpty = document.getElementById('boardEmpty');
+const boardNote = document.getElementById('boardNote');
+const tileFiles = document.getElementById('tileFiles');
+const tileSize = document.getElementById('tileSize');
+const typeChips = document.getElementById('typeChips');
+const clearBoardBtn = document.getElementById('clearBoard');
+
+const PRIMARY_ACTION = {{ brand.primary_action | tojson }};
+const PROCESSING = {{ brand.processing | tojson }};
+
+plansToScaleEl.addEventListener('change', () => plansBoxEl.classList.toggle('is-ticked', plansToScaleEl.checked));
 
 const countOnlyEl = document.getElementById('countOnly');
 const deadlineField = document.getElementById('deadlineField');
@@ -233,7 +186,18 @@ const fieldInputs = {
 let files = [];
 
 const folderInput = document.getElementById('folderInput');
-const chooseFolderLink = document.getElementById('chooseFolder');
+const chooseFilesBtn = document.getElementById('chooseFiles');
+const chooseFolderBtn = document.getElementById('chooseFolder');
+
+// The departures clock, as on the board in the brand guide.
+function tickClock() {
+  const now = new Date();
+  const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  const day = now.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+  document.getElementById('boardClock').textContent = `${time} · ${day}`;
+}
+tickClock();
+setInterval(tickClock, 30000);
 
 // System clutter that ends up inside folders and should never be sent.
 const JUNK_NAMES = new Set(['.ds_store', 'thumbs.db', 'desktop.ini']);
@@ -288,17 +252,23 @@ async function collectFromEntry(entry, path, out) {
   }
 }
 
-dropzone.addEventListener('click', () => fileInput.click());
-chooseFolderLink.addEventListener('click', e => {
-  e.preventDefault();
-  e.stopPropagation();
-  folderInput.click();
+dropzone.addEventListener('click', e => {
+  if (e.target.closest('button')) return;   // the buttons speak for themselves
+  fileInput.click();
 });
-dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
-dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+chooseFilesBtn.addEventListener('click', e => { e.stopPropagation(); fileInput.click(); });
+chooseFolderBtn.addEventListener('click', e => { e.stopPropagation(); folderInput.click(); });
+clearBoardBtn.addEventListener('click', e => {
+  e.stopPropagation();
+  if (busy) return;
+  files = [];
+  renderBoard();
+});
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('is-dragover'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('is-dragover'));
 dropzone.addEventListener('drop', async e => {
   e.preventDefault();
-  dropzone.classList.remove('dragover');
+  dropzone.classList.remove('is-dragover');
   // Must be read straight away - the browser empties the drop data after this event.
   const entries = Array.from(e.dataTransfer.items || [])
     .map(item => item.webkitGetAsEntry ? item.webkitGetAsEntry() : null)
@@ -308,20 +278,15 @@ dropzone.addEventListener('drop', async e => {
     return;
   }
   const hasFolder = entries.some(en => en.isDirectory);
-  if (hasFolder) {
-    statusEl.className = 'status';
-    statusEl.textContent = 'Reading folder...';
-  }
+  if (hasFolder) setStatus('Reading folder...', 'progress');
   const collected = [];
   try {
     for (const entry of entries) await collectFromEntry(entry, '', collected);
   } catch (err) {
-    statusEl.className = 'status error';
-    statusEl.textContent = "Couldn't read everything in that folder - try choosing the files directly instead.";
+    setStatus("Couldn't read everything in that folder - try choosing the files directly instead.", 'error');
   }
   if (hasFolder && !collected.length) {
-    statusEl.className = 'status error';
-    statusEl.textContent = 'That folder looks empty.';
+    setStatus('That folder looks empty.', 'error');
     return;
   }
   addFiles(collected);
@@ -336,8 +301,7 @@ folderInput.addEventListener('change', e => {
     .map(f => withPathName(f, f.webkitRelativePath));
   folderInput.value = '';
   if (!picked.length) {
-    statusEl.className = 'status error';
-    statusEl.textContent = 'That folder looks empty.';
+    setStatus('That folder looks empty.', 'error');
     return;
   }
   addFiles(picked);
@@ -347,25 +311,25 @@ countOnlyEl.addEventListener('change', () => {
   const isCountOnly = countOnlyEl.checked;
   deadlineField.style.display = isCountOnly ? 'none' : '';
   addressField.style.display = isCountOnly ? 'none' : '';
-  submitBtn.textContent = isCountOnly ? 'Count my pages' : 'Submit for quote';
+  submitBtn.textContent = isCountOnly ? 'Count my pages' : PRIMARY_ACTION;
   plansBoxEl.style.display = isCountOnly ? 'none' : '';
   updateSubmitState();
 });
 
 confirmFilesEl.addEventListener('change', updateSubmitState);
 
-// The submit button only works once there are files, they're within the
-// size limit, and the client has ticked to say they've checked the list.
+// The send button only works once there are files, they're within the
+// size limit, and the client has ticked to say they've checked the board.
 function updateSubmitState() {
   const total = files.reduce((s, f) => s + f.size, 0);
   const tooBig = total > MAX_TOTAL_BYTES;
   confirmFilesWrap.style.display = files.length ? '' : 'none';
-  confirmFilesWrap.classList.toggle('ticked', confirmFilesEl.checked);
+  confirmFilesWrap.classList.toggle('is-ticked', confirmFilesEl.checked);
   popupNoteEl.style.display = (files.length && confirmFilesEl.checked && countOnlyEl.checked) ? '' : 'none';
   if (busy) { submitBtn.disabled = true; submitHintEl.style.display = 'none'; return; }
   submitBtn.disabled = files.length === 0 || tooBig || !confirmFilesEl.checked;
   const hint = files.length && !tooBig && !confirmFilesEl.checked
-    ? 'Tick the box above to confirm all your files are listed.' : '';
+    ? 'Tick the box above to confirm every file is on the board.' : '';
   submitHintEl.textContent = hint;
   submitHintEl.style.display = hint ? '' : 'none';
 }
@@ -396,64 +360,129 @@ function addFiles(fileListObj) {
     const dup = files.some(x => x.name === f.name && x.size === f.size && x.lastModified === f.lastModified);
     if (!dup) files.push(f);
   }
-  renderFileList();
+  renderBoard();
 }
 
-function renderFileList() {
-  filelistEl.innerHTML = '';
-  // The list changed, so the client needs to check it again.
+function extensionOf(name) {
+  const m = /\.([A-Za-z0-9]+)$/.exec(name);
+  return m ? m[1].toUpperCase() : 'FILE';
+}
+
+// What's on the board, by type - the chips in the brand guide, with the
+// counts we actually know before anything is uploaded.
+function renderChips() {
+  const counts = new Map();
+  files.forEach(f => {
+    const ext = extensionOf(f.name);
+    counts.set(ext, (counts.get(ext) || 0) + 1);
+  });
+  const chips = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  typeChips.innerHTML = '';
+  chips.slice(0, 6).forEach(([ext, n]) => {
+    const span = document.createElement('span');
+    span.className = 'fp-chip';
+    span.textContent = `${n} × ${ext}`;
+    typeChips.appendChild(span);
+  });
+}
+
+function renderBoard() {
+  boardBody.innerHTML = '';
+  // The board changed, so the client needs to check it again.
   confirmFilesEl.checked = false;
+  let needsLook = 0;
+
   files.forEach((f, idx) => {
-    const div = document.createElement('div');
-    div.className = 'fileitem';
-    const info = document.createElement('span');
-    info.className = 'info';
-    const label = document.createElement('span');
-    label.textContent = `${f.name} (${formatBytes(f.size)})`;
-    info.appendChild(label);
     const warning = fileWarning(f);
-    if (warning) {
-      div.classList.add('suspicious');
-      const warn = document.createElement('span');
-      warn.className = 'warn';
-      warn.textContent = '\u26A0 ' + warning;
-      info.appendChild(warn);
+    if (warning) needsLook++;
+    const tr = document.createElement('tr');
+
+    const nameCell = document.createElement('td');
+    const name = document.createElement('div');
+    name.className = 'fp-board__file';
+    name.textContent = f.name;
+    nameCell.appendChild(name);
+    if (f._folder) {
+      const meta = document.createElement('span');
+      meta.className = 'fp-board__meta';
+      meta.textContent = f._folder;
+      nameCell.appendChild(meta);
     }
-    const remove = document.createElement('span');
-    remove.className = 'remove';
+    if (warning) {
+      const warn = document.createElement('span');
+      warn.className = 'fp-board__warn';
+      warn.textContent = warning;
+      nameCell.appendChild(warn);
+    }
+
+    const sizeCell = document.createElement('td');
+    sizeCell.className = 'fp-board__size';
+    sizeCell.textContent = formatBytes(f.size);
+
+    const statusCell = document.createElement('td');
+    const pill = document.createElement('span');
+    pill.className = 'fp-pill ' + (warning ? 'fp-pill--look' : 'fp-pill--cleared');
+    pill.textContent = warning ? {{ brand.needs_look_label | tojson }} : 'Ready';
+    statusCell.appendChild(pill);
+
+    const removeCell = document.createElement('td');
+    removeCell.style.textAlign = 'right';
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'fp-board__drop';
     remove.dataset.idx = idx;
     remove.innerHTML = '&#10005;';
-    remove.title = 'Remove this file';
-    div.appendChild(info);
-    div.appendChild(remove);
-    filelistEl.appendChild(div);
+    remove.title = 'Take this file off the board';
+    removeCell.appendChild(remove);
+
+    tr.append(nameCell, sizeCell, statusCell, removeCell);
+    boardBody.appendChild(tr);
   });
-  filelistEl.querySelectorAll('.remove').forEach(el => {
+
+  boardBody.querySelectorAll('.fp-board__drop').forEach(el => {
     el.addEventListener('click', () => {
       if (busy) return;
       files.splice(parseInt(el.dataset.idx), 1);
-      renderFileList();
+      renderBoard();
     });
   });
+
   const total = files.reduce((s, f) => s + f.size, 0);
-  listHeadingEl.style.display = files.length ? '' : 'none';
+  boardTable.style.display = files.length ? '' : 'none';
+  boardEmpty.style.display = files.length ? 'none' : '';
+  clearBoardBtn.style.display = files.length ? '' : 'none';
+  tileFiles.textContent = files.length;
+  tileSize.textContent = files.length ? formatBytes(total) : '0';
+  renderChips();
+
+  if (needsLook) {
+    boardNote.textContent = `Needs a look: ${needsLook} file${needsLook === 1 ? '' : 's'} on the board ` +
+      `may not have finished downloading. Check ${needsLook === 1 ? 'it' : 'them'} before you send.`;
+    boardNote.style.display = '';
+  } else {
+    boardNote.style.display = 'none';
+  }
+
   if (files.length) {
     filesAddedEl.innerHTML = '';
     filesAddedEl.appendChild(document.createTextNode(
-      `\u2713 ${files.length} file${files.length === 1 ? '' : 's'} added (${formatBytes(total)}) - `));
+      `✓ ${files.length} file${files.length === 1 ? '' : 's'} checked in (${formatBytes(total)}) - `));
     const jump = document.createElement('a');
-    jump.href = '#listHeading';
-    jump.textContent = 'listed at the bottom of the page';
+    jump.href = '#board';
+    jump.textContent = 'on the departures board below';
     filesAddedEl.appendChild(jump);
     filesAddedEl.style.display = '';
   } else {
     filesAddedEl.style.display = 'none';
   }
+
   updateSubmitState();
-  statusEl.className = 'status';
-  statusEl.textContent = total > MAX_TOTAL_BYTES
-    ? `Total size ${(total/1024/1024/1024).toFixed(2)}GB exceeds the 5GB limit - please remove some files.`
-    : '';
+  if (total > MAX_TOTAL_BYTES) {
+    setStatus(`Total size ${(total/1024/1024/1024).toFixed(2)}GB exceeds the 5GB limit - `
+      + 'please remove some files.', 'error');
+  } else if (statusEl.classList.contains('fp-status--error')) {
+    setStatus('', '');          // the list changed, so the old complaint is stale
+  }
 }
 
 function missingFields() {
@@ -497,7 +526,12 @@ function buildContactPayload() {
   };
 }
 
-// --- Progress display ---------------------------------------------------
+// --- Status and progress -------------------------------------------------
+function setStatus(text, kind) {
+  statusEl.className = kind ? `fp-status fp-status--${kind}` : 'fp-status';
+  statusEl.textContent = text || '';
+}
+
 // percent = a number shows a filling bar; percent = null shows an animated
 // "working on it" bar, for stages where there's no percentage to show.
 function setStage(text, percent) {
@@ -507,8 +541,7 @@ function setStage(text, percent) {
   } else {
     progressBar.value = Math.max(0, Math.min(100, percent));
   }
-  statusEl.className = 'status';
-  statusEl.textContent = text;
+  setStatus(text, 'progress');
 }
 
 function formatBytes(n) {
@@ -529,8 +562,7 @@ window.addEventListener('beforeunload', e => {
 function showError(msg) {
   busy = false;
   progressBar.style.display = 'none';
-  statusEl.className = 'status error';
-  statusEl.textContent = msg;
+  setStatus(msg, 'error');
   updateSubmitState();
 }
 
@@ -548,7 +580,7 @@ function addHistoryLine(parent, text) {
   p.appendChild(document.createTextNode(text + ' '));
   const a = document.createElement('a');
   a.href = '/my-submissions';
-  a.textContent = 'My submissions';
+  a.textContent = 'My jobs';
   p.appendChild(a);
   parent.appendChild(p);
 }
@@ -557,8 +589,14 @@ function showSuccess(parsed, isCountOnly) {
   busy = false;
   progressBar.style.display = 'none';
   const ref = parsed.reference_number;
-  statusEl.className = 'status success';
-  statusEl.textContent = '';
+  // Empty the board before writing the message: rendering the board touches
+  // the status line, so it has to happen first.
+  files = [];
+  renderBoard();
+  confirmFilesEl.checked = false;
+  document.getElementById('clientNote').value = '';
+  updateSubmitState();
+  setStatus('', 'done');
   if (isCountOnly) {
     if (parsed.report_html) {
       const opened = openReportInNewTab(parsed.report_html);
@@ -567,7 +605,9 @@ function showSuccess(parsed, isCountOnly) {
         : `Your page count${ref ? ` (reference ${ref})` : ''} is ready. Your browser blocked the new tab, so use the button below to open it.`);
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = 'open-report';
+      btn.id = 'openReport';
+      btn.className = 'fp-btn fp-btn--navy';
+      btn.style.marginTop = '12px';
       btn.textContent = 'Open my report';
       btn.addEventListener('click', () => {
         if (!openReportInNewTab()) {
@@ -576,19 +616,17 @@ function showSuccess(parsed, isCountOnly) {
         }
       });
       statusEl.appendChild(btn);
-      if (parsed.history) addHistoryLine(statusEl, "Nothing was sent to us for a quote. This count is also saved in");
+      if (parsed.history) addHistoryLine(statusEl, "Nothing was sent to the studio. This count is also saved in");
     } else {
       addParagraph(statusEl, 'Page count complete, but the report could not be displayed. Please try again.');
     }
   } else {
-    addParagraph(statusEl, `Thanks! Your files have been received${ref ? ` - your reference number is ${ref}` : ''} and we'll be in touch with a quote shortly.`);
+    addParagraph(statusEl, ref
+      ? `Sent to the studio. Your reference is ${ref}.`
+      : 'Sent to the studio.');
+    addParagraph(statusEl, "We'll be in touch with a quote shortly.");
     if (parsed.history) addHistoryLine(statusEl, "We've emailed you a confirmation. You can see everything you've sent us in");
   }
-  filelistEl.innerHTML = '';
-  files = [];
-  confirmFilesEl.checked = false;
-  document.getElementById('clientNote').value = '';
-  updateSubmitState();
 }
 
 // Small JSON request - used for /upload/init and /upload/finalize, both of
@@ -684,13 +722,13 @@ function submitLegacy(isCountOnly) {
     setStage(`Uploading - ${formatBytes(e.loaded)} of ${formatBytes(e.total)} (${Math.floor(pct)}%)`, pct);
   };
   xhr.upload.onload = () => {
-    setStage(isCountOnly ? 'Upload complete - counting your pages...' : 'Upload complete - finishing up...', null);
+    setStage(isCountOnly ? PROCESSING : 'Upload complete - finishing up...', null);
   };
   xhr.onload = () => {
     let parsed = {};
     try { parsed = JSON.parse(xhr.responseText); } catch (e) {}
     if (xhr.status === 200) showSuccess(parsed, isCountOnly);
-    else showError(parsed.error || 'Something went wrong submitting your files. Please try again or contact us directly.');
+    else showError(parsed.error || 'Something went wrong sending your files. Please try again or contact us directly.');
   };
   xhr.onerror = () => showError('Upload failed - please check your connection and try again.');
   xhr.send(formData);
@@ -736,10 +774,10 @@ async function waitForCount(initResp) {
     if (job.state === 'error') throw new Error(job.error || 'Something went wrong counting your pages.');
     const mins = Math.floor((Date.now() - startedAt) / 60000);
     const elapsed = mins >= 2 ? ` (${mins} minutes so far)` : '';
-    setStage((job.stage || 'Counting your pages...') + elapsed, null);
+    setStage((job.stage || PROCESSING) + elapsed, null);
   }
   throw new Error("Counting your pages is taking much longer than expected. It may still finish - you can "
-                  + "request a link to your submissions to check, or try again with fewer files.");
+                  + "request a link to your jobs to check, or try again with fewer files.");
 }
 
 // Main path: files go straight from this browser to Cloudflare R2 (up to 3
@@ -786,7 +824,7 @@ async function submitViaRelay(initResp, isCountOnly) {
     throw err;
   }
 
-  setStage(isCountOnly ? 'Upload complete - counting your pages...' : 'Upload complete - finishing up...', null);
+  setStage(isCountOnly ? PROCESSING : 'Upload complete - finishing up...', null);
   const finalizeResp = await postJSON('/upload/finalize', {
     submission_id, reference_number, token,
     count_only: isCountOnly,
@@ -806,18 +844,15 @@ async function submitViaRelay(initResp, isCountOnly) {
 submitBtn.addEventListener('click', async () => {
   const missing = missingFields();
   if (missing.length) {
-    statusEl.className = 'status error';
-    statusEl.textContent = `Please fill in: ${missing.join(', ')}.`;
+    setStatus(`Please fill in: ${missing.join(', ')}.`, 'error');
     return;
   }
   if (files.length === 0) {
-    statusEl.className = 'status error';
-    statusEl.textContent = 'Please add at least one file.';
+    setStatus('Please add at least one file.', 'error');
     return;
   }
   if (!confirmFilesEl.checked) {
-    statusEl.className = 'status error';
-    statusEl.textContent = "Please tick the box to confirm you've checked your file list.";
+    setStatus("Please tick the box to confirm you've checked the departures board.", 'error');
     return;
   }
 

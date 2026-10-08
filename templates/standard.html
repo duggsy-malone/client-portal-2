@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include '_head.html' %}
+<title>How we produce planning sets - {{ app_name }}</title>
+</head>
+<body class="fp-onpaper">
+<div class="fp-shell fp-shell--narrow">
+  {% set nav_active = 'standard' %}{% include '_header.html' %}
+
+  <span class="fp-label">How we print</span>
+  <h1>How we produce planning sets</h1>
+  <p class="fp-lede">This is the way we print, bind and deliver planning inquiry submissions. It's what you get
+    as standard, so you don't have to specify it. Send your files however they're organised and we'll take
+    care of the rest.</p>
+
+  <div class="fp-card" style="margin-top:20px">
+    <h2>Printing</h2>
+    <ul>
+      <li>A4 documents are printed double-sided on 100gsm paper or better.</li>
+      <li>A3 plans are printed single-sided and folded to A4, so they sit in the binders with everything else.</li>
+      <li>Larger plans are printed and folded to preserve their scale whenever you need them that way -
+        just say so with your files.</li>
+      <li>Landscape and visual impact assessments are printed to scale and folded to suit.</li>
+    </ul>
+  </div>
+
+  <div class="fp-card" style="margin-top:16px">
+    <h2>Binding and structure</h2>
+    <ul>
+      <li>Sets are bound in 4D presentation binders unless you ask for something else.</li>
+      <li>Binders are never overfilled. We leave clearance so they open, close and last the inquiry.</li>
+      <li>No chapter is ever split across two binders. Each one stays together, start to finish.</li>
+      <li>Design and access statements and non-technical summaries are produced as separate documents,
+        wiro bound so they open flat.</li>
+    </ul>
+  </div>
+
+  <div class="fp-card" style="margin-top:16px">
+    <h2>Finding your way around</h2>
+    <ul>
+      <li>Every binder opens with a contents page.</li>
+      <li>Every section gets a typed or numbered tab. Never handwritten.</li>
+      <li>Coloured divider sheets separate the chapters.</li>
+      <li>Spines are labelled with the project name, the document title and the volume number.</li>
+    </ul>
+  </div>
+
+  <div class="fp-card" style="margin-top:16px">
+    <h2>Checks before anything is printed</h2>
+    <ul>
+      <li>Your files are checked for quality and compatibility before production starts.</li>
+      <li>Pagination and indexing are reviewed against your structure before we run the full set.</li>
+      <li>Versions are tracked, and any change is confirmed with you before it's printed.</li>
+      <li>Sets are checked again as they're assembled, binder by binder.</li>
+    </ul>
+  </div>
+
+  <div class="fp-card" style="margin-top:16px">
+    <h2>Delivery</h2>
+    <ul>
+      <li>Sets are packed securely and tracked.</li>
+      <li>Where we can, we hand-deliver to the authority ourselves.</li>
+      <li>For anything urgent we use a time-critical service.</li>
+      <li>Delivery is planned around your submission deadline, not ours.</li>
+    </ul>
+  </div>
+
+  <p class="fp-note" style="margin-top:18px">Need something different for this job? Add it to the notes when you
+    check in your files, or get in touch and we'll work to whatever the inquiry asks for.</p>
+
+  <p style="margin-top:20px"><a class="fp-btn" href="{{ url_for('index') }}">Check in your artwork</a></p>
+
+  {% include '_footer.html' %}
+</div>
+</body>
+</html>

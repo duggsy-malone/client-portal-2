@@ -1,72 +1,81 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Uploads needing attention - {{ app_name }}</title>
+{% include '_head.html' %}
+<meta name="robots" content="noindex">
+<title>Jobs in progress - {{ app_name }}</title>
 {% if jobs|selectattr("status", "in", ["processing", "received"])|list %}<meta http-equiv="refresh" content="60">{% endif %}
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; background: #f4f6f8; margin: 0; color: #222; }
-  .wrap { max-width: 860px; margin: 32px auto; padding: 0 16px; }
-  h1 { font-size: 1.4rem; color: #2c3e50; }
-  .job { background: #fff; border: 1px solid #e0e0e0; border-radius: 12px; padding: 16px 18px; margin-bottom: 12px; }
-  .job.needs_attention { border-left: 5px solid #c0392b; }
-  .job.processing, .job.received { border-left: 5px solid #2980b9; }
-  .top { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: baseline; }
-  .ref { font-weight: bold; font-size: 1.05rem; }
-  .badge { font-size: 12px; padding: 2px 8px; border-radius: 10px; color: #fff; }
-  .badge.needs_attention { background: #c0392b; }
-  .badge.processing, .badge.received { background: #2980b9; }
-  .meta { color: #555; font-size: 13px; margin: 6px 0; }
-  .err { color: #c0392b; font-size: 13px; margin: 6px 0; }
-  .stage { color: #1c5a80; font-size: 13px; margin: 6px 0; font-weight: 600; }
-  .nav { text-align: right; font-size: 14px; margin: 0; }
-  .nav a { color: #2980b9; }
-  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
-  .actions a, .actions button { font-size: 14px; padding: 7px 12px; border-radius: 7px; border: 1px solid #2980b9; background: #fff; color: #2980b9; cursor: pointer; text-decoration: none; }
-  .actions button.primary { background: #2980b9; color: #fff; }
-  .actions button.danger { border-color: #c0392b; color: #c0392b; }
-  form { margin: 0; }
-  .empty { background: #fff; border: 1px solid #e0e0e0; border-radius: 12px; padding: 24px; color: #555; }
+  .fp-job { border-left: 5px solid var(--fp-line); }
+  .fp-job.needs_attention { border-left-color: var(--fp-ember); }
+  .fp-job.processing, .fp-job.received { border-left-color: var(--fp-cyan); }
+  .fp-job.sent { border-left-color: var(--fp-cleared); }
+  .fp-badge {
+    font-family: var(--fp-label-font); font-weight: 600; text-transform: uppercase;
+    letter-spacing: .09em; font-size: 11px; padding: 3px 10px; border-radius: 999px;
+    color: #fff; background: #6B6480; white-space: nowrap;
+  }
+  .fp-badge.needs_attention { background: var(--fp-ember); }
+  .fp-badge.processing, .fp-badge.received { background: var(--fp-navy); }
+  .fp-badge.sent { background: var(--fp-cleared); }
+  .fp-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; align-items: center; }
+  .fp-actions form { margin: 0; }
+  .fp-actions .fp-btn { font-size: 14px; padding: 9px 14px; }
+  .fp-btn--danger { background: #fff; color: var(--fp-ember); border-color: #F3C7B2; }
+  .fp-btn--danger:hover { background: #FDEDE6; }
 </style>
 </head>
-<body>
-<div class="wrap">
-  <p class="nav"><a href="{{ url_for('admin_submissions', key=key) }}">All submissions &rarr;</a></p>
-  <h1>{{ app_name }} &ndash; uploads in progress or needing attention</h1>
+<body class="fp-onpaper">
+<div class="fp-shell" style="max-width:900px">
+  <header class="fp-header">
+    {% include '_lockup.html' %}
+    <nav class="fp-nav">
+      <a href="{{ url_for('admin_submissions', key=key) }}">All jobs</a>
+      <a href="{{ url_for('attention', key=key) }}" aria-current="page">In progress</a>
+    </nav>
+  </header>
+
+  <span class="fp-label">Studio</span>
+  <h1 style="font-size:1.75rem">In progress or needing attention</h1>
+
   {% if storage_missing %}
-    <div class="empty">Cloudflare R2 isn't set up yet, so there's nothing to show here.</div>
+    <div class="fp-card">Cloudflare R2 isn't set up yet, so there's nothing to show here.</div>
   {% elif not jobs %}
-    <div class="empty">Nothing here - every upload has been processed and sent on.</div>
+    <div class="fp-card">Nothing here - every job has been processed and sent on.</div>
   {% endif %}
+
   {% for job in jobs %}
-  <div class="job {{ job.status }}">
-    <div class="top">
-      <span class="ref">{{ 'Page count' if job.kind == 'count' else 'Quote' }} ref {{ job.reference_number }}</span>
-      <span class="badge {{ job.status }}">{{ 'Needs attention' if job.status == 'needs_attention' else ('Finishing up' if job.status == 'sent' else 'Processing') }}</span>
+  <div class="fp-card fp-job {{ job.status }}" style="margin-top:14px">
+    <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:baseline">
+      <span><span class="fp-small fp-muted">{{ 'Page count' if job.kind == 'count' else 'Quote' }}</span><br>
+        <span class="fp-mono" style="font-size:17px;font-weight:500">{{ job.reference_number }}</span></span>
+      <span class="fp-badge {{ job.status }}">{{ 'Needs attention' if job.status == 'needs_attention' else ('Finishing up' if job.status == 'sent' else 'Processing') }}</span>
     </div>
-    <div class="meta">
+    <div class="fp-small fp-muted" style="margin-top:8px">
       {{ job.contact.full_name }}{% if job.contact.company %}, {{ job.contact.company }}{% endif %}
       {% if job.contact.email %} &middot; {{ job.contact.email }}{% endif %}
       {% if job.contact.phone %} &middot; {{ job.contact.phone }}{% endif %}
     </div>
-    <div class="meta">{{ job.contact.subject }} &middot; {{ job.file_count }} file(s), {{ job.total_mb }} MB &middot; last update {{ job.updated_at[:16].replace('T', ' ') }} UTC</div>
-    {% if job.stage and job.status != 'needs_attention' %}<div class="stage">Now: {{ job.stage }}</div>{% endif %}
-    {% if job.error %}<div class="err">{{ job.error }}</div>{% endif %}
-    <div class="actions">
-      <a href="{{ url_for('attention_files', submission_id=job.submission_id, key=key) }}">Download files</a>
+    <div class="fp-small fp-muted">{{ job.contact.subject }} &middot; {{ job.file_count }} file(s), {{ job.total_mb }} MB
+      &middot; last update {{ job.updated_at[:16].replace('T', ' ') }} UTC</div>
+    {% if job.stage and job.status != 'needs_attention' %}
+      <p style="margin:10px 0 0"><span class="fp-pill fp-pill--progress">{{ job.stage }}</span></p>
+    {% endif %}
+    {% if job.error %}<p class="fp-small" style="margin:10px 0 0;color:var(--fp-ember)">{{ job.error }}</p>{% endif %}
+    <div class="fp-actions">
+      <a class="fp-btn fp-btn--ghost" href="{{ url_for('attention_files', submission_id=job.submission_id, key=key) }}">Download files</a>
       <form method="post" action="{{ url_for('attention_retry') }}">
         <input type="hidden" name="key" value="{{ key }}"><input type="hidden" name="submission_id" value="{{ job.submission_id }}">
-        <button class="primary" type="submit">Try processing again</button>
+        <button class="fp-btn" type="submit">Try processing again</button>
       </form>
       <form method="post" action="{{ url_for('attention_delete') }}" onsubmit="return confirm('Delete these files from storage for good? Only do this once you have them.');">
         <input type="hidden" name="key" value="{{ key }}"><input type="hidden" name="submission_id" value="{{ job.submission_id }}">
-        <button class="danger" type="submit">Delete from storage</button>
+        <button class="fp-btn fp-btn--danger" type="submit">Delete from storage</button>
       </form>
     </div>
   </div>
   {% endfor %}
-  <p class="nav" style="text-align:left;color:#90a4ae;font-size:12px">{{ app_name }} V{{ version }}</p>
+  <p class="fp-small fp-foot__legal" style="margin-top:18px">{{ app_name }} V{{ version }}</p>
 </div>
 </body>
 </html>

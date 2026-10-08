@@ -1,0 +1,12 @@
+{# The portal header: the lockup, the nav, and the link back to the parent.
+   Set nav_active before including this. #}
+<header class="fp-header">
+  {% include '_lockup.html' %}
+  <nav class="fp-nav">
+    <a href="{{ url_for('index') }}"{% if nav_active == 'checkin' %} aria-current="page"{% endif %}>Check in</a>
+    <a href="/my-submissions"{% if nav_active == 'jobs' %} aria-current="page"{% endif %}>My jobs</a>
+    <a href="/standard"{% if nav_active == 'standard' %} aria-current="page"{% endif %}>How we print</a>
+  </nav>
+  <a class="fp-parent" href="{{ brand.parent_url }}" target="_blank"
+     rel="noopener">{{ brand.parent_name }}.com &#8599;</a>
+</header>

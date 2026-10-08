@@ -1,0 +1,12 @@
+{# The wordmark on its own. Real text, so it sets in Work Sans and stays crisp
+   at any size; only the tile is an image. The endorsement always goes under
+   the wordmark - the guide drops it only on the square app mark. #}
+<a class="fp-lockup" href="{{ url_for('index') }}">
+  <img src="{{ url_for('static', filename=brand.mark) }}" alt=""
+       style="height:{{ brand.mark_height_px }}px" width="{{ brand.mark_height_px }}"
+       height="{{ brand.mark_height_px }}">
+  <span>
+    <span class="fp-wordmark">{{ brand.wordmark_lead }}<em>{{ brand.wordmark_tail }}</em></span>
+    <span class="fp-endorse">{{ brand.endorsement }}</span>
+  </span>
+</a>

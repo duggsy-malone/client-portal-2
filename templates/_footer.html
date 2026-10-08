@@ -1,0 +1,9 @@
+{# The footer every page shares. The endorsement stays visible: clients move
+   between iPrintManage.com and Flightpath without thinking about it. #}
+<div class="fp-foot">
+  <p class="fp-foot__strap">{{ brand.parent_strapline }}</p>
+  {% if brand.contact_lines %}<p>{% for line in brand.contact_lines %}{{ line }}{% if not loop.last %}<br>{% endif %}{% endfor %}</p>{% endif %}
+  {% if brand.footer_links %}<p>{% for label, url in brand.footer_links %}<a href="{{ url }}">{{ label }}</a>{% if not loop.last %} &middot; {% endif %}{% endfor %}</p>{% endif %}
+  {% if brand.footer_legal %}<p class="fp-foot__legal">{% for line in brand.footer_legal %}{{ line }}{% if not loop.last %}<br>{% endif %}{% endfor %}</p>{% endif %}
+  <p class="fp-foot__legal">{{ app_name }} V{{ version }}</p>
+</div>

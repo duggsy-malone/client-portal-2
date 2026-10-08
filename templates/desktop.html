@@ -1,98 +1,146 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Page Counter</title>
-<style>
-  :root { --brand: #2c3e50; --accent: #2980b9; }
-  * { box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; background: #f4f6f8; margin: 0; color: #222; }
-  .wrap { max-width: 640px; margin: 40px auto; padding: 0 16px; }
-  h1 { color: var(--brand); font-size: 1.6rem; margin-bottom: 4px; }
-  p.lede { color: #555; margin-top: 0; }
-  .dropzone { border: 2px dashed #b0bec5; border-radius: 12px; background: #fff; padding: 44px 24px; text-align: center; cursor: pointer; }
-  .dropzone.dragover { border-color: var(--accent); background: #eaf3fa; }
-  .dropzone p { margin: 8px 0; color: #607d8b; }
-  .dropzone .icon { font-size: 40px; }
-  input[type=file] { display: none; }
-  .filelist { margin-top: 14px; max-height: 260px; overflow-y: auto; }
-  .fileitem { display: flex; justify-content: space-between; background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 8px 12px; margin-bottom: 6px; font-size: 13px; gap: 10px; }
-  .fileitem .remove { color: #c0392b; cursor: pointer; font-weight: bold; }
-  .summary { font-size: 13px; color: #555; margin-top: 6px; }
-  .row { display: flex; gap: 10px; margin-top: 16px; }
-  .row input { flex: 1; border-radius: 8px; border: 1px solid #ccc; padding: 11px; font-size: 14px; }
-  button { padding: 12px 16px; border: none; border-radius: 8px; background: var(--accent); color: #fff; font-size: 15px; cursor: pointer; }
-  button:disabled { background: #b0bec5; cursor: not-allowed; }
-  button.secondary { background: #fff; color: var(--accent); border: 1px solid var(--accent); }
-  .status { margin-top: 14px; font-size: 14px; }
-  .status.error { color: #c0392b; }
-  .status.success { background: #e8f8ef; border: 1px solid #b7e4c7; padding: 14px; border-radius: 8px; color: #1e6b3c; }
-  .actions { display: none; gap: 10px; margin-top: 10px; }
-  progress { width: 100%; height: 10px; margin-top: 12px; border: none; border-radius: 5px; -webkit-appearance: none; appearance: none; background: #e3e8ec; overflow: hidden; }
-  progress::-webkit-progress-bar { background: #e3e8ec; border-radius: 5px; }
-  progress::-webkit-progress-value { background: var(--accent); border-radius: 5px; }
-  progress::-moz-progress-bar { background: var(--accent); }
-  progress:indeterminate { background: linear-gradient(90deg, #e3e8ec 0%, #e3e8ec 30%, var(--accent) 50%, #e3e8ec 70%, #e3e8ec 100%); background-size: 250% 100%; animation: sweep 1.3s linear infinite; }
-  progress:indeterminate::-webkit-progress-bar { background: transparent; }
-  @keyframes sweep { from { background-position: 100% 0; } to { background-position: 0% 0; } }
-  .note { font-size: 12px; color: #90a4ae; margin-top: 22px; }
-</style>
+{% include '_head.html' %}
+<title>Page Counter - {{ app_name }}</title>
 </head>
 <body>
-<div class="wrap">
-  <h1>Page Counter</h1>
-  <p class="lede">Drop in files or folders to get a page count and size report. Everything stays on this computer.</p>
+<div class="fp-shell fp-shell--narrow">
+  <header class="fp-header">
+    {% include '_lockup.html' %}
+    <span class="fp-label" style="margin:0 0 0 auto">Page Counter</span>
+  </header>
 
-  <div class="dropzone" id="dropzone">
-    <div class="icon">&#128193;</div>
-    <p><strong>Drag &amp; drop files or folders here</strong>, or click to browse</p>
-    <p style="font-size:13px"><a href="#" id="chooseFolder">Choose a whole folder instead</a></p>
+  <div class="fp-checkin" id="dropzone">
+    <img class="fp-checkin__dart" src="{{ url_for('static', filename=brand.dart) }}" alt="" aria-hidden="true">
+    <div class="fp-checkin__body">
+      <h1>Count pages on this computer</h1>
+      <p class="fp-lede">Drop in files or folders for a page count and size report. Nothing leaves this
+        computer, and there's no size limit.</p>
+      <div class="fp-btn-row">
+        <button type="button" class="fp-btn" id="chooseFiles">{{ brand.drop_button }}</button>
+        <button type="button" class="fp-btn fp-btn--ghost" id="chooseFolder">{{ brand.drop_button_folder }}</button>
+        <button type="button" class="fp-btn fp-btn--ghost" id="clearBtn" style="display:none">{{ brand.clear_button }}</button>
+      </div>
+      <p class="fp-mono fp-small fp-muted" style="margin:0">{{ brand.accepted_line.split(' - ')[0] }} - no limit here</p>
+    </div>
     <input type="file" id="fileInput" multiple>
     <input type="file" id="folderInput" webkitdirectory directory multiple>
   </div>
-  <div class="summary" id="summary"></div>
-  <div class="filelist" id="filelist"></div>
 
-  <div class="row">
-    <input type="text" id="jobName" placeholder="Job name for the report (optional)">
-    <button id="countBtn" disabled>Count pages</button>
+  <div class="fp-card" style="margin-top:16px">
+    <span class="fp-label">{{ brand.batch_title }}</span>
+    <div class="fp-tiles">
+      <div class="fp-tile">
+        <div class="fp-tile__value" id="tileFiles">0</div>
+        <div class="fp-tile__label">files</div>
+      </div>
+      <div class="fp-tile">
+        <div class="fp-tile__value" id="tileSize">0</div>
+        <div class="fp-tile__label">to count</div>
+      </div>
+    </div>
+    <div class="fp-chips" id="typeChips"></div>
   </div>
-  <div class="row" style="margin-top:8px"><button class="secondary" id="clearBtn" type="button">Clear list</button></div>
 
-  <progress id="progressBar" value="0" max="100" style="display:none"></progress>
-  <div id="status" class="status"></div>
-  <div class="actions" id="actions">
-    <button id="openReport" type="button">Open report again</button>
-    <button class="secondary" id="saveCsv" type="button">Save as spreadsheet (CSV)</button>
+  <section class="fp-board" id="board" style="margin-top:16px">
+    <div class="fp-board__head">
+      <span class="fp-label fp-label--onnavy">{{ brand.board_title }}</span>
+      <span class="fp-board__clock" id="boardClock"></span>
+    </div>
+    <div class="fp-board__empty" id="boardEmpty">{{ brand.empty_board }}</div>
+    <table id="boardTable" style="display:none">
+      <thead><tr><th>File</th><th>Size</th><th>Status</th><th><span class="fp-sr">Remove</span></th></tr></thead>
+      <tbody id="boardBody"></tbody>
+    </table>
+    <div class="fp-board__foot">Counted on this computer. Each file is read, counted and the copy deleted
+      before the next one starts.</div>
+  </section>
+
+  <label class="fp-scale" id="plansBox" style="margin-top:16px">
+    <input type="checkbox" id="plansToScale">
+    <span>
+      <span class="fp-scale__title">Plans printed to scale</span>
+      <span class="fp-scale__sub">If left unticked, the report assumes plans go to <b>A3 and folded</b>.</span>
+    </span>
+  </label>
+
+  <div class="fp-card" style="margin-top:16px">
+    <span class="fp-label">Run the count</span>
+    <label class="fp-field">Job name for the report
+      <input type="text" id="jobName" placeholder="Optional">
+    </label>
+    <button type="button" class="fp-btn fp-btn--lg fp-btn--block" id="countBtn" disabled
+            style="margin-top:14px">Count pages</button>
+    <progress class="fp-progress" id="progressBar" value="0" max="100" style="display:none"></progress>
+    <div id="status"></div>
+    <div id="actions" style="display:none;gap:10px;margin-top:14px;flex-wrap:wrap">
+      <button type="button" class="fp-btn fp-btn--navy" id="openReport">Open report again</button>
+      <button type="button" class="fp-btn fp-btn--ghost" id="saveCsv">Save as spreadsheet (CSV)</button>
+    </div>
   </div>
 
-  <p class="note">To close Page Counter, close the Terminal (or Command Prompt) window it opened in.</p>
+  <p class="fp-small fp-muted" style="margin-top:18px">To close Page Counter, close the Terminal
+    (or Command Prompt) window it opened in.</p>
+
+  <div class="fp-foot">
+    <p class="fp-foot__strap">{{ brand.parent_strapline }}</p>
+    <p class="fp-foot__legal">{{ app_name }} Page Counter V{{ version }} &middot; runs on this computer only</p>
+  </div>
 </div>
 
 <script>
 const dropzone = document.getElementById('dropzone');
 const fileInput = document.getElementById('fileInput');
 const folderInput = document.getElementById('folderInput');
-const filelistEl = document.getElementById('filelist');
-const summaryEl = document.getElementById('summary');
 const countBtn = document.getElementById('countBtn');
 const statusEl = document.getElementById('status');
 const progressBar = document.getElementById('progressBar');
 const actionsEl = document.getElementById('actions');
+const boardBody = document.getElementById('boardBody');
+const boardTable = document.getElementById('boardTable');
+const boardEmpty = document.getElementById('boardEmpty');
+const tileFiles = document.getElementById('tileFiles');
+const tileSize = document.getElementById('tileSize');
+const typeChips = document.getElementById('typeChips');
+const clearBtn = document.getElementById('clearBtn');
+const plansBoxEl = document.getElementById('plansBox');
+const plansToScaleEl = document.getElementById('plansToScale');
 let files = [];
 let lastResult = null;
+let busy = false;
+
+plansToScaleEl.addEventListener('change', () => plansBoxEl.classList.toggle('is-ticked', plansToScaleEl.checked));
+
+function tickClock() {
+  const now = new Date();
+  const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  const day = now.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+  document.getElementById('boardClock').textContent = `${time} · ${day}`;
+}
+tickClock();
+setInterval(tickClock, 30000);
 
 const JUNK_NAMES = new Set(['.ds_store', 'thumbs.db', 'desktop.ini']);
 function isJunk(name) {
   const lower = name.toLowerCase();
   return lower.startsWith('.') || lower.startsWith('~$') || JUNK_NAMES.has(lower);
 }
+
+// Same as the website: a file from inside a folder keeps its folder path in
+// its name, and remembers the folder separately so the report can show tabs,
+// dividers and the folder structure.
 function withPathName(file, relativePath) {
-  if (!relativePath || relativePath === file.name) return file;
-  const flat = relativePath.split('/').filter(Boolean).join(' - ');
-  return new File([file], flat, { type: file.type, lastModified: file.lastModified });
+  if (!relativePath || relativePath === file.name) {
+    file._folder = '';
+    return file;
+  }
+  const parts = relativePath.split('/').filter(Boolean);
+  const named = new File([file], parts.join(' - '), { type: file.type, lastModified: file.lastModified });
+  named._folder = parts.slice(0, -1).join('/');
+  return named;
 }
+
 function readAllEntries(dirReader) {
   return new Promise((resolve, reject) => {
     const all = [];
@@ -104,6 +152,7 @@ function readAllEntries(dirReader) {
     readBatch();
   });
 }
+
 async function collectFromEntry(entry, path, out) {
   if (isJunk(entry.name)) return;
   if (entry.isFile) {
@@ -115,75 +164,160 @@ async function collectFromEntry(entry, path, out) {
     }
   }
 }
+
 function formatBytes(n) {
   if (n >= 1024 ** 3) return (n / 1024 ** 3).toFixed(2) + ' GB';
   if (n >= 1024 ** 2) return (n / 1024 ** 2).toFixed(1) + ' MB';
+  if (n === 0) return '0 KB';
   return Math.max(1, Math.round(n / 1024)) + ' KB';
 }
+
+function setStatus(text, kind) {
+  statusEl.className = kind ? `fp-status fp-status--${kind}` : 'fp-status';
+  statusEl.textContent = text || '';
+}
+
 function setStage(text, percent) {
   progressBar.style.display = 'block';
-  if (percent === null) progressBar.removeAttribute('value'); else progressBar.value = percent;
-  statusEl.className = 'status';
-  statusEl.textContent = text;
+  if (percent === null || percent === undefined) progressBar.removeAttribute('value');
+  else progressBar.value = Math.max(0, Math.min(100, percent));
+  setStatus(text, 'progress');
+}
+
+function extensionOf(name) {
+  const m = /\.([A-Za-z0-9]+)$/.exec(name);
+  return m ? m[1].toUpperCase() : 'FILE';
+}
+
+function renderChips() {
+  const counts = new Map();
+  files.forEach(f => counts.set(extensionOf(f.name), (counts.get(extensionOf(f.name)) || 0) + 1));
+  typeChips.innerHTML = '';
+  [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 6).forEach(([ext, n]) => {
+      const span = document.createElement('span');
+      span.className = 'fp-chip';
+      span.textContent = `${n} × ${ext}`;
+      typeChips.appendChild(span);
+    });
 }
 
 function addFiles(list) {
+  if (busy) return;
   for (const f of list) {
     if (!files.some(x => x.name === f.name && x.size === f.size && x.lastModified === f.lastModified)) files.push(f);
   }
-  render();
-}
-function render() {
-  filelistEl.innerHTML = '';
-  files.forEach((f, idx) => {
-    const div = document.createElement('div');
-    div.className = 'fileitem';
-    const label = document.createElement('span');
-    label.textContent = `${f.name} (${formatBytes(f.size)})`;
-    const remove = document.createElement('span');
-    remove.className = 'remove';
-    remove.innerHTML = '&#10005;';
-    remove.addEventListener('click', () => { files.splice(idx, 1); render(); });
-    div.append(label, remove);
-    filelistEl.appendChild(div);
-  });
-  const total = files.reduce((s, f) => s + f.size, 0);
-  summaryEl.textContent = files.length ? `${files.length} file(s), ${formatBytes(total)}` : '';
-  countBtn.disabled = files.length === 0;
+  renderBoard();
 }
 
-dropzone.addEventListener('click', () => fileInput.click());
-document.getElementById('chooseFolder').addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); folderInput.click(); });
-dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
-dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+function renderBoard() {
+  boardBody.innerHTML = '';
+  files.forEach((f, idx) => {
+    const tr = document.createElement('tr');
+
+    const nameCell = document.createElement('td');
+    const name = document.createElement('div');
+    name.className = 'fp-board__file';
+    name.textContent = f.name;
+    nameCell.appendChild(name);
+    if (f._folder) {
+      const meta = document.createElement('span');
+      meta.className = 'fp-board__meta';
+      meta.textContent = f._folder;
+      nameCell.appendChild(meta);
+    }
+
+    const sizeCell = document.createElement('td');
+    sizeCell.className = 'fp-board__size';
+    sizeCell.textContent = formatBytes(f.size);
+
+    const statusCell = document.createElement('td');
+    const pill = document.createElement('span');
+    pill.className = 'fp-pill fp-pill--cleared';
+    pill.textContent = 'Ready';
+    statusCell.appendChild(pill);
+
+    const removeCell = document.createElement('td');
+    removeCell.style.textAlign = 'right';
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'fp-board__drop';
+    remove.dataset.idx = idx;
+    remove.innerHTML = '&#10005;';
+    remove.title = 'Take this file off the board';
+    removeCell.appendChild(remove);
+
+    tr.append(nameCell, sizeCell, statusCell, removeCell);
+    boardBody.appendChild(tr);
+  });
+
+  boardBody.querySelectorAll('.fp-board__drop').forEach(el => {
+    el.addEventListener('click', () => {
+      if (busy) return;
+      files.splice(parseInt(el.dataset.idx), 1);
+      renderBoard();
+    });
+  });
+
+  const total = files.reduce((s, f) => s + f.size, 0);
+  boardTable.style.display = files.length ? '' : 'none';
+  boardEmpty.style.display = files.length ? 'none' : '';
+  clearBtn.style.display = files.length ? '' : 'none';
+  tileFiles.textContent = files.length;
+  tileSize.textContent = files.length ? formatBytes(total) : '0';
+  renderChips();
+  countBtn.disabled = busy || files.length === 0;
+}
+
+dropzone.addEventListener('click', e => {
+  if (e.target.closest('button')) return;
+  fileInput.click();
+});
+document.getElementById('chooseFiles').addEventListener('click', e => { e.stopPropagation(); fileInput.click(); });
+document.getElementById('chooseFolder').addEventListener('click', e => { e.stopPropagation(); folderInput.click(); });
+clearBtn.addEventListener('click', e => {
+  e.stopPropagation();
+  if (busy) return;
+  files = [];
+  lastResult = null;
+  renderBoard();
+  setStatus('', '');
+  progressBar.style.display = 'none';
+  actionsEl.style.display = 'none';
+});
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('is-dragover'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('is-dragover'));
 dropzone.addEventListener('drop', async e => {
   e.preventDefault();
-  dropzone.classList.remove('dragover');
-  const entries = Array.from(e.dataTransfer.items || []).map(i => i.webkitGetAsEntry ? i.webkitGetAsEntry() : null).filter(Boolean);
+  dropzone.classList.remove('is-dragover');
+  const entries = Array.from(e.dataTransfer.items || [])
+    .map(i => i.webkitGetAsEntry ? i.webkitGetAsEntry() : null).filter(Boolean);
   if (!entries.length) { addFiles(e.dataTransfer.files); return; }
-  statusEl.className = 'status'; statusEl.textContent = 'Reading...';
+  setStatus('Reading folder...', 'progress');
   const collected = [];
-  try { for (const entry of entries) await collectFromEntry(entry, '', collected); }
-  catch (err) { statusEl.className = 'status error'; statusEl.textContent = "Couldn't read everything that was dropped."; }
-  statusEl.textContent = '';
+  try {
+    for (const entry of entries) await collectFromEntry(entry, '', collected);
+  } catch (err) {
+    setStatus("Couldn't read everything that was dropped.", 'error');
+  }
+  if (!collected.length) { setStatus('That folder looks empty.', 'error'); return; }
+  setStatus('', '');
   addFiles(collected);
 });
 fileInput.addEventListener('change', e => { addFiles(e.target.files); fileInput.value = ''; });
 folderInput.addEventListener('change', e => {
-  addFiles(Array.from(e.target.files)
+  const picked = Array.from(e.target.files)
     .filter(f => !(f.webkitRelativePath || f.name).split('/').some(isJunk))
-    .map(f => withPathName(f, f.webkitRelativePath)));
+    .map(f => withPathName(f, f.webkitRelativePath));
   folderInput.value = '';
-});
-document.getElementById('clearBtn').addEventListener('click', () => {
-  files = []; render(); statusEl.textContent = ''; progressBar.style.display = 'none'; actionsEl.style.display = 'none';
+  if (!picked.length) { setStatus('That folder looks empty.', 'error'); return; }
+  addFiles(picked);
 });
 
 function openReport(html) {
   const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
   if (!window.open(url, '_blank')) {
-    statusEl.className = 'status error';
-    statusEl.textContent = 'The report is ready but the pop-up was blocked - click "Open report again".';
+    setStatus('The report is ready but the pop-up was blocked - use "Open report again".', 'error');
   }
 }
 document.getElementById('openReport').addEventListener('click', () => lastResult && openReport(lastResult.report_html));
@@ -197,39 +331,44 @@ document.getElementById('saveCsv').addEventListener('click', () => {
 });
 
 countBtn.addEventListener('click', () => {
-  if (!files.length) return;
+  if (!files.length || busy) return;
+  busy = true;
   countBtn.disabled = true;
   actionsEl.style.display = 'none';
   const form = new FormData();
   files.forEach(f => form.append('files', f));
   form.append('job_name', document.getElementById('jobName').value);
+  form.append('folders', JSON.stringify(files.map(f => f._folder || '')));
+  form.append('plans_to_scale', plansToScaleEl.checked ? '1' : '0');
   const xhr = new XMLHttpRequest();
   xhr.open('POST', '/count', true);
   xhr.upload.onprogress = e => {
-    if (e.lengthComputable) setStage(`Reading files - ${formatBytes(e.loaded)} of ${formatBytes(e.total)}`, (e.loaded / e.total) * 100);
+    if (e.lengthComputable) {
+      setStage(`Reading files - ${formatBytes(e.loaded)} of ${formatBytes(e.total)}`, (e.loaded / e.total) * 100);
+    }
   };
-  xhr.upload.onload = () => setStage('Counting pages...', null);
+  xhr.upload.onload = () => setStage({{ brand.processing | tojson }}, null);
   xhr.onload = () => {
+    busy = false;
     progressBar.style.display = 'none';
     countBtn.disabled = false;
     let parsed = {};
     try { parsed = JSON.parse(xhr.responseText); } catch (e) {}
     if (xhr.status !== 200) {
-      statusEl.className = 'status error';
-      statusEl.textContent = parsed.error || 'Something went wrong.';
+      setStatus(parsed.error || 'Something went wrong.', 'error');
       return;
     }
     lastResult = parsed;
-    statusEl.className = 'status success';
-    statusEl.textContent = `Done - ${parsed.files} file(s), ${parsed.items} page/item row(s). The report has opened in a new tab.`;
+    setStatus(`Counted ${parsed.files} file(s), ${parsed.items} page/item row(s). `
+      + 'The report has opened in a new tab.', 'done');
     actionsEl.style.display = 'flex';
     openReport(parsed.report_html);
   };
   xhr.onerror = () => {
+    busy = false;
     progressBar.style.display = 'none';
     countBtn.disabled = false;
-    statusEl.className = 'status error';
-    statusEl.textContent = "Couldn't reach Page Counter - is its Terminal window still open?";
+    setStatus("Couldn't reach Page Counter - is its Terminal window still open?", 'error');
   };
   setStage('Reading files...', 0);
   xhr.send(form);

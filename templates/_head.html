@@ -1,0 +1,31 @@
+{# Everything the <head> of every page needs: the fonts, the icons, and the
+   brand values handed to the stylesheet as custom properties. Change a colour
+   in branding.py and every page follows. #}
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="{{ brand.colour_primary }}">
+<link rel="icon" href="{{ url_for('static', filename=brand.favicon) }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename=brand.apple_icon) }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="{{ brand.font_google_url }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='brand/flightpath.css') }}?v={{ version }}">
+<style>
+  :root {
+    --fp-orange: {{ brand.colour_primary }};
+    --fp-beacon: {{ brand.colour_beacon }};
+    --fp-navy: {{ brand.colour_navy }};
+    --fp-paper: {{ brand.colour_paper }};
+    --fp-cyan: {{ brand.colour_cyan }};
+    --fp-ember: {{ brand.colour_ember }};
+    --fp-cleared: {{ brand.colour_cleared }};
+    --fp-cleared-navy: {{ brand.colour_cleared_on_navy }};
+    --fp-muted: {{ brand.colour_muted }};
+    --fp-line: {{ brand.colour_line }};
+    --fp-card: {{ brand.colour_card }};
+    --fp-tile: {{ brand.colour_tile }};
+    --fp-font: {{ brand.font_body | safe }};
+    --fp-label-font: {{ brand.font_label | safe }};
+    --fp-mono: {{ brand.font_mono | safe }};
+  }
+</style>
