@@ -1,8 +1,84 @@
 # Flightpath - client file upload & quoting portal (V2.0)
 
-The portal is called **Flightpath**. The name and version live in `version.py` (`APP_NAME`, `VERSION`) and flow through the pages, the report headings and footers, and the email subjects ("[Flightpath quote 220926-00027] ...", "[Flightpath page count ...]"). Change them in that one file.
+The portal is called **Flightpath**. The name and version live in `version.py` (`APP_NAME`, `VERSION`) and flow through the pages, the report headings and footers. Change them in that one file.
 
 Worth setting in Render too: `EMAIL_FROM_NAME=Flightpath`, so that's the sender name clients see.
+
+## Branding
+
+The portal wears the **Flight Path brand guide v1.0** (September 2026). Everything about how it looks and what it says lives in **`branding.py`**: the palette, the fonts, which image files to use, the tagline, every line of portal microcopy, the contact details and the footer legal lines. No page, report or email hard-codes a colour, a font or a line of copy.
+
+Two rules from the guide are easy to break by accident, so they're worth knowing:
+
+- **Text on orange is always navy, never white.** White on Flight Orange only passes contrast at 28px and above, so it's reserved for display type.
+- **Runway Cyan belongs to iPrintManage, not Flightpath.** It appears only as a focus ring and as the "in progress" marker, never as a fill.
+
+### Colour
+
+| Name | Hex | Where |
+|---|---|---|
+| Flight Orange | `#FF7A1A` | buttons, the app tile, the check-in zone |
+| Beacon | `#FFA125` | hovers, highlights, "needs a look", text on navy |
+| Night Navy | `#1C0072` | shared with iPrintManage - type, the departures board, the dart |
+| Paper | `#FFF8F2` | page background, warmer than white |
+| Runway Cyan | `#00BFF9` | focus rings and "in progress" only |
+| Ember | `#C2410C` | small text, links and errors on light backgrounds |
+
+### Type
+
+Work Sans (800 display at -4% tracking, 700 headings at -2%, 400 body at 16/26), Barlow Condensed SemiBold in caps at +14% for labels, and JetBrains Mono Medium for every figure and size so the numbers line up. The pages load all three from Google Fonts; if that's blocked, they fall back to the system sans and nothing shifts. **Emails and the report never rely on a web font** - mail programs strip them - so those use a plain stack with a mono stack for figures.
+
+### Images
+
+Images live in **`static/brand/`**, and `static/brand/READ ME.txt` describes each one. The wordmark is **not** an image: "Flightpath" is live text on every page, two-tone, with "by iPrintManage" under it, so it stays sharp and reflows on a phone. Only the square tile is a picture.
+
+| File | What it is |
+|---|---|
+| `mark.svg` | The orange tile - dotted trail and paper dart. Header, admin pages, favicon source. |
+| `mark-navy.svg` / `mark-mono.svg` | For navy backgrounds, and for single-colour print. |
+| `dart.svg` / `dart-on-navy.svg` | The loose dart and trail for hero areas (orange trail on light, white on navy). |
+| `favicon.png` / `favicon.ico` / `apple-touch-icon.png` | Generated from `mark.svg` - ask and they're regenerated. |
+| `flightpath.css` | The skin every page shares. It reads its colours from `branding.py`. |
+
+The email header image is the one asset that can't live here: mail programs won't load an image from a page's own files. Emails already carry a navy header bar with the wordmark as text, which survives images being turned off, so it's optional - host a 1200x200 image publicly and paste the link into `EMAIL_HEADER_URL` if you want one.
+
+## The skin
+
+`static/brand/flightpath.css` plus three small includes (`templates/_head.html`, `_header.html`, `_footer.html`, and `_lockup.html` for the wordmark) give every page the same furniture: the header with the nav and the link back to iPrintManage.com, Paper background, white cards, orange buttons with navy text, cyan focus rings, Barlow Condensed labels, mono figures, and the `CLEARED` / `NEEDS A LOOK` status pills.
+
+The brand values reach the stylesheet as CSS custom properties written by `_head.html`, so the stylesheet itself stays cacheable and `branding.py` remains the only place a colour is set.
+
+### The departures board
+
+The client's file list is the navy **departures board** from the guide (page 8): file name, size and a status pill per row, with the folder path and any warning underneath. On a phone it stops being a table and each file becomes its own block, so long file names get the full width.
+
+One honest difference from the mock-up in the guide: the guide's board shows pages and trim sizes per file, because that mock counts in the browser. Flightpath counts on the server, after the files arrive - so before sending, the board shows what's actually known (name, size, and whether a file looks unfinished) and rows read **READY**, not **CLEARED**. Pages, trim sizes and the real Cleared / Needs a look verdicts come back in the report.
+
+## Portal microcopy
+
+The wording from the guide (page 7) is in `branding.py`, not scattered through the templates: "Check in your artwork", the drop-zone line, "Running pre-flight...", "Needs a look", "No files checked in yet.", "Send to studio", and the password-protected-file message. Change a line there and it changes everywhere, including the progress messages and the report.
+
+## Reference numbers
+
+References read **`FP-24091`**, as in the guide. `reference_number.py` builds them from a counter plus an offset, both configurable: `REFERENCE_PREFIX` (default `FP`) and `REFERENCE_START` (default `24000`), so the series reads as an established one rather than starting at `FP-00001`.
+
+References issued under the old `160926-00001` format are untouched - they're stored with each job, so old emails and old private links still resolve. The token check accepts both shapes, which means an upload in flight during a deploy doesn't break.
+
+## Email subjects
+
+| Email | Subject |
+|---|---|
+| Quote report, nothing flagged | `Cleared for print: FP-24091 (1,284 pages) - <subject> - 12 file(s) - TO SCALE` |
+| Quote report, something flagged | `Needs a look: FP-24091 (1,284 pages, 3 flagged) - <subject> - 12 file(s)` |
+| Self-service page count | `Page count: FP-24091 (1,284 pages) - <subject> - 12 file(s)` |
+| Couldn't process | `FP-24091 - Needs attention - couldn't process automatically` |
+| To the client, on sending | `Sent to the studio: FP-24091` |
+
+The report leads with "Cleared for print" only when nothing needs a decision; otherwise it says "Needs a look", because the guide asks rather than accuses.
+
+## The Standard page
+
+`/standard` - "How we produce planning sets", linked from the top of the upload page. It describes the finish clients receive: A4 double-sided on 100gsm or better, A3 folded to A4, 4D binders with clearance, no chapter split across binders, contents pages, typed tabs, coloured dividers, spine labels, DAS and non-technical summaries produced separately, the pre-production checks and tracked delivery. It's deliberately descriptive - not a specification clients have to meet - and the wording is all in `templates/standard.html`.
 
 A drag-and-drop portal for clients to upload job files (PDF, JPG, ZIP, PPTX, XLSX).
 Every submission is analysed automatically in the background - page/slide/sheet
@@ -299,24 +375,30 @@ Before they can submit, the client has to tick "I've checked my file list and I 
 ## What's in the report
 
 - **Plans banner** (quote requests): "PLANS: PRINTED TO SCALE" or "PLANS: A3 FOLDED", from the tick box on the upload page. It's also on the end of the email subject ("- TO SCALE" / "- A3 FOLDED").
+- **As per the Standard** (the first tab in a browser): what would actually be produced, rather than what's in the files. The binder work split by how it prints (A4 and smaller double-sided, A3 single-sided folded to A4, larger formats folded to keep their scale) with pages and sheets for each, then the binders, tabs and dividers; then **produced separately** - design and access statements and non-technical summaries, wiro bound, with their page counts; then what needs a decision before printing. The totals row at the top still shows the plain figures.
+- **Separate documents:** recognised by keywords in the file name *and* the folders above it (`SEPARATE_DOCUMENT_RULES` in `structure.py` - extend it as other document types come up). Their pages stay in the totals and they still count as tabs and dividers, but they come out of the binder figure, which then reads "10 binders, plus 15 wiro bound". Anything over 64 pages (`CHECK_BINDING_OVER_PAGES`) carries a note to check the binding; the binding label itself is one value, `SEPARATE_BINDING` in `structure.py` (currently "Wiro bound").
 - **Totals, together:** pages/items, estimated sheets of paper, **folders needed** (one folder holds 380 sheets printed double-sided - change `SHEETS_PER_FOLDER` in `report.py`), **tabs** (one per folder, at every level, including the outer folder the client dragged in, and a ZIP counts as a folder), **dividers** (one per document: every file, and every file inside a ZIP), and files.
 - **Spreadsheets - check these:** every Excel file with its folder, worksheets, estimated pages, sizes, and whether the print size is set in the file or estimated.
 - **Quantity by size**, with non-standard sizes broken down.
+- **Sizes by section**: the same sizes split by top-level folder, with documents, pages and sheets for each section, so a chapter can be priced on its own.
+- **Possible duplicates**: documents with the same page count, the same sizes in the same order *and* near-identical names - two revisions, or high and low resolution versions of one appendix - with each one's file size and the pages you'd save printing one of each. Where the file sizes match exactly it says so, because that almost certainly is the same file twice. Documents under 3 pages are never listed (`MIN_DUPLICATE_PAGES`), names have to be at least 72% alike (`DUPLICATE_NAME_SIMILARITY`) and a set of more than 5 is treated as a template used many times rather than a mistake (`MAX_DUPLICATE_SET`). Without the name test, 195 unrelated seven-page energy reports in the Archway job came out as one "duplicate set".
+- **The same document, whole and in pieces** (in the duplicates tab): a file that looks like a complete document while the same document is also present split into chapters - the 278-page `ArchwayCampus-DAS-A.pdf` against ten chapter files totalling 277. Both the names and the page totals have to line up, so coincidences don't get reported.
 - **Suggested scaling**, in its own section and deliberately not counted into the totals, so it can be checked: each odd size, how many there are, and what would fit it - "Scale up to A4" (smaller than A4), "Scale up to A3" (bigger than A4, within A3), "Scale down to A3" (bigger than A3), or "Too small to scale - check manually" for anything under 100mm on its long side (`MIN_SCALE_LONG_MM` in `paper_sizes.py`). Every **PowerPoint** deck is listed here too, whatever its slide size, as "Scale to A4 - PowerPoint slides", counted by slides rather than by deck. Each suggestion gets a **subtotal**, with an overall total at the bottom.
+- **Two flag counts instead of one**: "needs a decision" (odd sizes, unreadable files, estimates) and "not countable, passed on anyway" (file types this tool can't count). The old single "flagged for review" figure mixed the two, so a job with 40 text files in it looked alarming.
 - **Folder structure:** a diagram of the folders with documents and pages in each folder (including subfolders). In the page-count report each folder has a "show files" toggle; the email shows folders only.
 - **Full breakdown** of every page.
-- In a **browser** (the page-count report, and the saved copies on the admin and My submissions pages) the sections above are **tabs**, so the page isn't one endless scroll; the heading, client details and totals stay above them, and the tab you picked is remembered while the tab stays open. Emails can't do tabs, so the quote email shows every section stacked.
+- In a **browser** (the page-count report, and the saved copies on the admin and My jobs pages) the sections above are **tabs**, so the page isn't one endless scroll; the heading, client details and totals stay above them, and the tab you picked is remembered while the tab stays open. Emails can't do tabs, so the quote email shows every section stacked.
 - The CSV has the same totals, spreadsheet and folder sections.
 - Folder details come from the upload page, which sends each file's real folder path. Reports from before this change can't be recounted for tabs.
 - **ZIPs are accepted and opened one file at a time**: each file inside is written out, counted and deleted before the next, so a single 5GB archive holding the whole job never lands on the server in one go (a 655MB ZIP of 155 files peaked at 57MB of memory in rehearsal). Folders inside the archive become tabs, files inside become dividers, and nested ZIPs work to three levels deep. Progress comes from inside the archive too ("Counting pages (12 of 300 inside job.zip)..."), so a single-ZIP job doesn't look stuck. Two guards: an entry that expands more than 200x (a "zip bomb") and anything over `ANALYSE_MAX_FILE_MB` are listed as "check manually" rather than opened, as is an archive holding more than 20,000 files.
 - **US Letter counts as A4** in the size totals (like US Legal). The true measurements are still in the full breakdown.
 - **Spreadsheet sizes:** only cells with something in them count towards a sheet's estimated size (formatting on empty cells is ignored). A sheet that still comes out bigger than 2.5 m on a side is listed as "check manually" instead of given a size.
 
-## Submission history ("My submissions") and the admin list
+## Job history ("My jobs") and the admin list
 
 Needs Cloudflare R2 (above) and email (Brevo) to be set up - nothing else to configure.
 
-- **Clients don't need an account.** After a quote request they get a short confirmation email with their reference number and a **View my submissions** button. That opens a private page listing everything sent from that email address: reference, date, quote or page count, files, pages, quantity by size, and their copy of the report. The link lasts 30 days. Any time after that, the **My submissions** link at the top of the upload page lets them enter their email and get a fresh link by email. (A link is only ever emailed, never shown on screen, so nobody can look up someone else's submissions by typing their address.)
+- **Clients don't need an account.** After a quote request they get a short confirmation email with their reference number and a **View my jobs** button. That opens a private page listing everything sent from that email address: reference, date, quote or page count, files, pages, quantity by size, and their copy of the report. The link lasts 30 days. Any time after that, the **My jobs** link in the header lets them enter their email and get a fresh link by email. (A link is only ever emailed, never shown on screen, so nobody can look up someone else's jobs by typing their address.)
 - **Only submissions from when this went live** are listed - earlier ones weren't recorded.
 - **Each email address has its own history**, so a typo in the address files that submission under the typo. Capital letters don't matter.
 - **The files themselves aren't kept** - just a few KB of details per submission, plus a copy of the report (tens of KB). A thousand submissions is roughly 50-200 MB, well inside R2's free 10 GB.
@@ -326,14 +408,29 @@ Needs Cloudflare R2 (above) and email (Brevo) to be set up - nothing else to con
 
 ## Desktop Page Counter (for your own use)
 
-`Page Counter.zip` is a separate download: the same page counting and size checks, running entirely on your own computer. Nothing is uploaded and there's no size limit. Unzip it somewhere permanent (e.g. Documents), double-click **Page Counter.command** (Mac) or **Page Counter.bat** (Windows), and it opens in your browser. The first run takes a minute or two to set itself up. Full instructions are in its "READ ME FIRST.txt". Its source files are `desktop_app.py`, `templates/desktop.html` and the `desktop/` folder in this project, and it reuses `analyzer.py`, `paper_sizes.py` and `report.py`, so size rules stay identical to the website.
+`Page_Counter_desktop.zip` is a separate download: the same counting and size checks, running entirely on your own computer. Nothing is uploaded and there's no size limit. Unzip it somewhere permanent (e.g. Documents), double-click **Page Counter.command** (Mac) or **Page Counter.bat** (Windows), and it opens in your browser. The first run takes a minute or two to set itself up; after that it starts in seconds. Full instructions are in its "READ ME FIRST.txt".
+
+It is built from this project rather than written separately, so the two can't drift apart: it ships copies of `analyzer.py`, `paper_sizes.py`, `report.py`, `structure.py`, `branding.py` and `version.py`, plus `templates/desktop.html`, `_head.html`, `_lockup.html` and `static/brand/`. A count on the desktop and a count on the website agree, and it wears the same skin.
+
+What it does that the old build didn't:
+
+- **Wears the Flight Path skin** - same check-in card, departures board, batch tiles, navy report.
+- **Counts one file at a time.** Each file is copied to a temp folder, counted, and that copy deleted before the next one starts, so a 20 GB job doesn't need 20 GB of spare space.
+- **Keeps folder structure.** Drop in a folder (or use "Choose a folder") and the report gets the real tabs, dividers and folder diagram. Loose files can't show structure, because the folders aren't there to see.
+- **Has the plans-to-scale tick box**, which changes the sheet figures the same way it does on the portal.
+- **Recognises DAS and non-technical summaries** and lists them separately, wiro bound, out of the binder count but still tabbed.
+- **Needs two packages instead of five.** PowerPoint and Excel are read with the standard library now, so `python-pptx` and `openpyxl` are gone from `requirements.txt` - only Flask, pypdf and Pillow remain. Quicker first run, less to go wrong.
+
+It listens on 127.0.0.1 only, so nobody else on the network can reach it. It needs the internet on the first run and for the fonts; with no internet it still works, just in your computer's own typefaces.
+
+Rebuild it with `build_desktop.py` after changing any shared module, so the copies it ships stay current.
 
 ## Project files
 
 ```
 app.py          - Flask web server: both upload routes, storage, cleanup, kicks off analysis+email
 r2_storage.py   - Cloudflare R2 storage for large uploads (see "Large files: Cloudflare R2")
-history.py      - submission records for "My submissions" and the admin list
+history.py      - job records for "My jobs" and the admin list
 structure.py    - documents (dividers), folders (tabs), the folder diagram and spreadsheet list
 analyzer.py     - the core file-analysis logic (PDF/JPG/PPTX/XLSX/ZIP)
 paper_sizes.py  - reference tables of standard page/slide sizes + matching logic
@@ -347,7 +444,8 @@ transfernow_upload.py - TransferNow provider (works now, free 14-day trial then 
 templates/index.html - the client-facing drag & drop page
 templates/my_submissions.html - the client's private submission history page
 templates/admin_*.html - admin pages: login, all submissions, uploads needing attention, file downloads
-desktop_app.py, templates/desktop.html, desktop/ - the desktop Page Counter
+desktop_app.py, templates/desktop.html      - the desktop Page Counter
+                                             (packaged by build_desktop.py)
 make_samples.py - generates the test files used to validate the analyzer (samples/)
 samples/        - sample test files (mixed standard + unusual sizes)
 uploads/        - where submitted files land (auto-deleted after 30 days)

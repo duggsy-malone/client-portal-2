@@ -8,6 +8,7 @@ import io
 from collections import OrderedDict
 from datetime import datetime
 
+import branding
 import structure
 from paper_sizes import suggest_scale
 from version import APP_NAME, VERSION
@@ -90,17 +91,49 @@ def estimate_sheets(rows):
     return sum((small + 1) // 2 + large for small, large in per_doc.values())
 
 
+# Notes that mean "we can't count this file type", as opposed to "someone
+# needs to look at this". Kept apart so the flag count means something.
+NOT_COUNTABLE_MARKERS = ("not a file type we can count", "file type not analysed by this tool")
+
+
+def flag_counts(rows):
+    """(needs_decision, not_countable). The first is odd sizes, unreadable
+    files and estimates - things to look at before quoting. The second is
+    file types this tool can't count, which are simply passed on."""
+    needs_decision = not_countable = 0
+    for r in rows:
+        note = (r.notes or "").lower()
+        if any(marker in note for marker in NOT_COUNTABLE_MARKERS):
+            not_countable += 1
+        elif r.flagged:
+            needs_decision += 1
+    return needs_decision, not_countable
+
+
 def job_totals(rows, folder_info=None, documents=None):
     """The headline numbers shown together at the top of the report."""
     documents = documents if documents is not None else structure.build_documents(rows, folder_info)
+    sheets = estimate_sheets(rows)
+    needs_decision, not_countable = flag_counts(rows)
+    # Design & access statements and non-technical summaries are bound as
+    # their own documents, so they don't fill binders (they still get a tab).
+    separate = structure.separate_documents(documents)
+    separate_ids = {id(s["document"]) for s in separate}
+    binder_rows = [r for d in documents if id(d) not in separate_ids for r in d.rows]
+    sheets_in_binders = estimate_sheets(binder_rows)
     return {
         "pages": len(rows),
-        "sheets": estimate_sheets(rows),
-        "folders_needed": -(-estimate_sheets(rows) // SHEETS_PER_FOLDER),  # rounded up
+        "sheets": sheets,
+        "sheets_in_binders": sheets_in_binders,
+        "separate_documents": len(separate),
+        "separate_pages": sum(s["pages"] for s in separate),
+        "folders_needed": -(-sheets_in_binders // SHEETS_PER_FOLDER),  # rounded up
         "tabs": structure.count_tabs(documents),
         "dividers": len(documents),
         "files": len(set(r.source_file for r in rows)),
         "flagged": sum(1 for r in rows if r.flagged),
+        "needs_decision": needs_decision,
+        "not_countable": not_countable,
     }
 
 
@@ -175,7 +208,9 @@ def rows_to_csv(rows, folder_info=None, plans_to_scale=None):
     writer.writerow(["Tabs (one per folder)", totals["tabs"]])
     writer.writerow(["Dividers (one per document)", totals["dividers"]])
     writer.writerow(["Files uploaded", totals["files"]])
-    writer.writerow(["Flagged for review", totals["flagged"]])
+    writer.writerow(["Needs a decision", totals["needs_decision"], "odd sizes, unreadable files, estimates"])
+    writer.writerow(["Not countable (passed on anyway)", totals["not_countable"],
+                     "file types this tool can't count"])
     writer.writerow([])
 
     spreadsheets = structure.spreadsheet_documents(documents)
@@ -186,6 +221,45 @@ def rows_to_csv(rows, folder_info=None, plans_to_scale=None):
             info = structure.describe_spreadsheet(d)
             writer.writerow([info["name"], info["folder"], info["worksheets"], info["pages"],
                              info["sizes"].replace("×", "x"), info["print_size"]])
+        writer.writerow([])
+
+    separate = structure.separate_documents(documents)
+    if separate:
+        writer.writerow([f"PRODUCED SEPARATELY ({len(separate)}) - not counted into the binders"])
+        writer.writerow(["Document", "Folder", "What it is", "Pages", "Binding", "Note"])
+        for entry in separate:
+            writer.writerow([entry["name"], entry["folder"], entry["kind"], entry["pages"],
+                             entry["binding"], entry["note"]])
+        writer.writerow(["Separate documents total", "", "", sum(e["pages"] for e in separate), "", ""])
+        writer.writerow([])
+
+    writer.writerow(["AS PER THE STANDARD - what would be produced"])
+    writer.writerow(["", "Pages", "Sheets"])
+    separate_ids = {id(e["document"]) for e in separate}
+    binder_rows = [r for d in documents if id(d) not in separate_ids for r in d.rows]
+    for label, subset in (
+            ("A4 and smaller, printed double-sided",
+             [r for r in binder_rows if r.matched_size in DOUBLE_SIDED_SIZES]),
+            ("A3 plans, single-sided and folded to A4", [r for r in binder_rows if r.matched_size == "A3"]),
+            ("Larger formats, folded to keep their scale",
+             [r for r in binder_rows if r.width_mm is not None and r.matched_size != "A3"
+              and r.matched_size not in DOUBLE_SIDED_SIZES])):
+        if subset:
+            writer.writerow([label, len(subset), estimate_sheets(subset)])
+    writer.writerow(["Into binders", len(binder_rows), totals["sheets_in_binders"]])
+    writer.writerow(["Binders needed", totals["folders_needed"], FOLDERS_EXPLANATION])
+    writer.writerow([f"Produced separately ({structure.SEPARATE_BINDING.lower()})",
+                     totals["separate_documents"],
+                     totals["separate_pages"]])
+    writer.writerow([])
+
+    split_combined = structure.find_split_and_combined(documents)
+    if split_combined:
+        writer.writerow(["THE SAME DOCUMENT, WHOLE AND IN PIECES"])
+        writer.writerow(["Document", "Folder", "Pages", "Parts elsewhere", "Pages in those parts", "Where"])
+        for item in split_combined:
+            writer.writerow([item["document"], item["folder"], item["pages"], item["parts"],
+                             item["part_pages"], item["where"]])
         writer.writerow([])
 
     suggestions = build_scaling_suggestions(rows)
@@ -210,6 +284,32 @@ def rows_to_csv(rows, folder_info=None, plans_to_scale=None):
             # plain "x": Excel can garble the multiply sign in a CSV
             writer.writerow(["    " + size_label.replace("×", "x"), qty, "No"])
     writer.writerow([])
+
+    duplicates = structure.find_possible_duplicates(documents)
+    if duplicates:
+        writer.writerow([f"POSSIBLE DUPLICATES ({len(duplicates)} set(s)) - same pages, same sizes, same order"])
+        writer.writerow(["Set", "Document", "Folder", "Pages", "File size (bytes)", "Same file size?"])
+        for n, group in enumerate(duplicates, start=1):
+            for d in group["documents"]:
+                writer.writerow([n, d["name"], d["folder"], group["pages"], d.get("bytes") or "",
+                                 "Yes" if group["identical_files"] else "No"])
+        writer.writerow(["Pages saved by printing one of each", sum(g["extra_pages"] for g in duplicates)])
+        writer.writerow([])
+
+    section_list = structure.sections(documents)
+    if len(section_list) > 1:
+        writer.writerow(["QUANTITY BY SIZE, BY SECTION"])
+        writer.writerow(["Section", "Size", "Quantity", "Documents in section", "Pages in section",
+                         "Sheets in section"])
+        for name, docs in section_list:
+            section_rows = [r for d in docs for r in d.rows]
+            for entry in build_size_summary(section_rows):
+                label = entry["label"] + (" (total)" if entry["breakdown"] else "")
+                writer.writerow([name, label, entry["qty"], len(docs), len(section_rows),
+                                 estimate_sheets(section_rows)])
+                for size_label, qty in entry["breakdown"]:
+                    writer.writerow([name, "    " + size_label.replace("\u00d7", "x"), qty, "", "", ""])
+        writer.writerow([])
 
     tree = structure.build_tree(documents)
     folders = list(structure.walk_folders(tree))
@@ -246,6 +346,14 @@ _TREE_CHILDREN = "margin:0 0 0 10px;padding:0 0 0 14px;border-left:1px solid #c5
 _TREE_COUNT = "color:#607d8b;font-size:12px;white-space:nowrap"
 
 
+def _mb(n):
+    if not n:
+        return ""
+    if n >= 1024 * 1024:
+        return f"{n / 1024 / 1024:.1f} MB"
+    return f"{max(1, n // 1024)} KB"
+
+
 def _plural(n, word):
     return f"{n:,} {word}{'' if n == 1 else 's'}"
 
@@ -273,7 +381,7 @@ def _tree_html(node, interactive):
         if interactive and child.documents:
             n = len(child.documents)
             inner += (f'<details style="margin:1px 0 2px 22px"><summary style="cursor:pointer;font-size:12px;'
-                      f'color:#2980b9">show {n} file{"" if n == 1 else "s"}</summary>'
+                      f'color:#C2410C">show {n} file{"" if n == 1 else "s"}</summary>'
                       f'<ul style="{_TREE_CHILDREN}">' + "".join(_doc_line(d) for d in child.documents)
                       + "</ul></details>")
         if child.children:
@@ -288,7 +396,9 @@ def _tree_html(node, interactive):
 # Long section titles for the email, where everything is shown one after
 # the other rather than as tabs.
 _EMAIL_TITLES = {
+    "As per the Standard": "As per the Standard - what we would produce",
     "Quantity by size": "Quantity by size (all files combined)",
+    "Sizes by section": "Quantity by size, split by section",
     "Suggested scaling": "Suggested scaling for odd sizes (not part of the totals)",
     "Folder structure": "Folder structure",
     "Full breakdown": "Full breakdown - every page / slide / sheet / image",
@@ -305,7 +415,8 @@ def _sections(sections, tabbed):
     if not tabbed:
         return "".join(
             f'<h3>{_EMAIL_TITLES.get(title, title)}'
-            f'{" - check these" if title.startswith("Spreadsheets") else ""}</h3>{body}'
+            f'{" - check these" if title.startswith("Spreadsheets") else ""}'
+            f'{" - worth a look" if title.startswith("Possible duplicates") else ""}</h3>{body}'
             for title, body in sections)
     buttons = "".join(
         f'<button type="button" class="tab-btn{" active" if i == 0 else ""}" data-panel="panel-{i}">'
@@ -349,6 +460,84 @@ _TAB_SCRIPT = """
     """
 
 
+# The report is read in two places - in a browser, and inside an email - so it
+# carries its own styling and never links to a stylesheet or a web font. The
+# brand colours come from branding.py; the type falls back to what mail
+# programs actually have.
+_REPORT_CSS = """
+      body { font-family: __BODY__; color: __NAVY__; background: __PAPER__; margin: 0; padding: 0;
+             line-height: 1.55; }
+      .fp-bar { background: __NAVY__; color: #fff; padding: 15px 20px; }
+      .fp-bar .fp-wm { font-size: 20px; font-weight: bold; letter-spacing: -0.02em; }
+      .fp-bar .fp-wm span { color: __BEACON__; }
+      .fp-bar .fp-en { font-size: 10px; font-weight: bold; color: #B9AEE6; padding-top: 1px; }
+      .fp-bar .fp-ref { float: right; font-family: __MONO__; font-size: 13px; color: __BEACON__; }
+      .fp-body { max-width: 1040px; margin: 0 auto; padding: 18px 20px 30px; }
+      h2 { font-size: 22px; letter-spacing: -0.02em; color: __NAVY__; margin: 0 0 12px; }
+      h3 { color: __NAVY__; margin-top: 0; }
+      h4 { color: __NAVY__; }
+      a { color: __EMBER__; }
+      table { border-collapse: collapse; width: 100%; font-size: 13px; margin-bottom: 24px;
+              background: #fff; }
+      th, td { border: 1px solid __LINE__; padding: 7px 9px; text-align: left; }
+      th { background: __NAVY__; color: #fff; text-transform: uppercase; letter-spacing: 0.09em;
+           font-size: 11px; }
+      tr.flagged { background: __WARMTINT__; }
+      tr.nonstandard-summary { background: __WARMTINT__; }
+      tr.nonstandard-sub { background: #FFFBF5; color: __MUTED__; }
+      tr.subtotal { background: #F4EFFA; }
+      tr.grandtotal { background: __NAVY__; color: #fff; }
+      tr.grandtotal b { color: #fff; }
+      .summary { margin-bottom: 16px; }
+      .badge { display:inline-block; background:__EMBER__; color:#fff; padding:2px 9px;
+               border-radius:999px; font-size:12px; }
+      .badge.grey { background:__MUTED__; }
+      .qty { font-family: __MONO__; font-weight: bold; text-align: right; }
+      .tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 2px solid __NAVY__; margin: 18px 0 0; }
+      .tab-btn {
+        font: inherit; font-size: 14px; padding: 9px 16px; cursor: pointer; color: __NAVY__;
+        background: #F7F1EB; border: 1px solid __LINE__; border-bottom: none;
+        border-radius: 8px 8px 0 0; margin-bottom: -2px;
+      }
+      .tab-btn:hover { background: #F1E8E0; }
+      .tab-btn.active { background: __NAVY__; color: #fff; border-color: __NAVY__; font-weight: bold; }
+      .tab-panels { border: 1px solid __LINE__; border-top: none; border-radius: 0 0 8px 8px;
+                    padding: 16px; background: #fff; }
+      .tab-panel { display: none; }
+      .tab-panel.active { display: block; max-height: 74vh; overflow: auto; }
+      .tab-panel > table { margin-bottom: 0; }
+      .tree summary::-webkit-details-marker { color: __MUTED__; }
+"""
+
+
+def _report_style():
+    """The CSS above with the brand's values filled in. Written with tokens
+    rather than an f-string because CSS is full of braces."""
+    values = {
+        "__BODY__": branding.FONT_EMAIL,
+        "__MONO__": branding.FONT_EMAIL_MONO,
+        "__NAVY__": branding.COLOUR_NAVY,
+        "__BEACON__": branding.COLOUR_BEACON,
+        "__PAPER__": branding.COLOUR_PAPER,
+        "__EMBER__": branding.COLOUR_EMBER,
+        "__LINE__": branding.COLOUR_LINE,
+        "__MUTED__": branding.COLOUR_MUTED,
+        "__WARMTINT__": "#FFF4E7",
+    }
+    css = _REPORT_CSS
+    for token, value in values.items():
+        css = css.replace(token, value)
+    return "<style>" + css + "    </style>"
+
+
+def _report_bar(display_ref):
+    """The navy header bar, as on the emails in the brand guide."""
+    ref = f'<span class="fp-ref">{_e(display_ref)}</span>' if display_ref else ""
+    return (f'<div class="fp-bar">{ref}'
+            f'<div class="fp-wm">{branding.WORDMARK_LEAD}<span>{branding.WORDMARK_TAIL}</span></div>'
+            f'<div class="fp-en">{branding.ENDORSEMENT}</div></div>')
+
+
 def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetransfer_error=None,
                   contact=None, count_only=False, reference_number=None, title=None, banner=None,
                   folder_info=None, plans_to_scale=None, collapsible=None):
@@ -360,37 +549,7 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
     totals = job_totals(rows, documents=documents)
     summary = build_size_summary(rows)
 
-    style = """
-    <style>
-      body { font-family: Arial, Helvetica, sans-serif; color: #222; }
-      table { border-collapse: collapse; width: 100%; font-size: 13px; margin-bottom: 24px; }
-      th, td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; }
-      th { background: #2c3e50; color: #fff; }
-      tr.flagged { background: #fff3cd; }
-      tr.nonstandard-summary { background: #fff3cd; }
-      tr.nonstandard-sub { background: #fffaeb; color: #555; }
-      tr.subtotal { background: #eceff1; }
-      tr.grandtotal { background: #2c3e50; color: #fff; }
-      tr.grandtotal b { color: #fff; }
-      .summary { margin-bottom: 16px; }
-      .badge { display:inline-block; background:#c0392b; color:#fff; padding:2px 8px; border-radius:10px; font-size:12px; }
-      h3 { color: #2c3e50; margin-top: 0; }
-      .qty { font-weight: bold; text-align: right; }
-      .tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 2px solid #2c3e50; margin: 18px 0 0; }
-      .tab-btn {
-        font: inherit; font-size: 14px; padding: 9px 16px; cursor: pointer; color: #2c3e50;
-        background: #eceff1; border: 1px solid #cfd8dc; border-bottom: none;
-        border-radius: 8px 8px 0 0; margin-bottom: -2px;
-      }
-      .tab-btn:hover { background: #e0e6e9; }
-      .tab-btn.active { background: #2c3e50; color: #fff; border-color: #2c3e50; font-weight: bold; }
-      .tab-panels { border: 1px solid #cfd8dc; border-top: none; border-radius: 0 0 8px 8px; padding: 16px; }
-      .tab-panel { display: none; }
-      .tab-panel.active { display: block; max-height: 74vh; overflow: auto; }
-      .tab-panel > table { margin-bottom: 0; }
-      .tree summary::-webkit-details-marker { color: #90a4ae; }
-    </style>
-    """
+    style = _report_style()
 
     summary_rows_html = ""
     for s in summary:
@@ -454,36 +613,36 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
     count_only_banner = ""
     if count_only:
         count_only_banner = (
-            '<p style="background:#eaf3fa;border:1px solid #b8d9ec;padding:10px 14px;'
+            '<p style="background:#EAF8FE;border:1px solid #B3E3F6;padding:10px 14px;'
             'border-radius:8px;color:#1c5a80">This is a self-service page count only &ndash; '
             'nothing has been sent to us, and your files were deleted as soon as they\'d been counted.</p>'
         )
     if banner:
         count_only_banner = (
-            '<p style="background:#eaf3fa;border:1px solid #b8d9ec;padding:10px 14px;'
+            '<p style="background:#EAF8FE;border:1px solid #B3E3F6;padding:10px 14px;'
             f'border-radius:8px;color:#1c5a80">{_e(banner)}</p>'
         )
 
     plans_html = ""
     if plans_to_scale is not None:
         if plans_to_scale:
-            plans_html = ('<p style="background:#1e3a5f;color:#fff;padding:12px 16px;border-radius:8px;'
+            plans_html = ('<p style="background:#1C0072;color:#fff;padding:12px 16px;border-radius:8px;'
                           'font-size:17px;margin:0 0 16px"><b>&#128208; PLANS: PRINTED TO SCALE</b></p>')
         else:
-            plans_html = ('<p style="background:#f39c12;color:#222;padding:12px 16px;border-radius:8px;'
+            plans_html = ('<p style="background:#FFA125;color:#1C0072;padding:12px 16px;border-radius:8px;'
                           'font-size:17px;margin:0 0 16px"><b>&#128208; PLANS: A3 FOLDED</b> '
                           '<span style="font-size:13px">(not to scale)</span></p>')
 
     if wetransfer_link:
         files_link_html = (
             f'<p style="margin-top:10px"><a href="{wetransfer_link}" '
-            f'style="display:inline-block;background:#2980b9;color:#fff;padding:8px 16px;'
+            f'style="display:inline-block;background:#FF7A1A;color:#1C0072;padding:9px 18px;'
             f'border-radius:6px;text-decoration:none;font-weight:bold">Download original files</a>'
-            f'<br><span style="font-size:11px;color:#888">{_e(wetransfer_link)}</span></p>'
+            f'<br><span style="font-size:11px;color:#6B6480">{_e(wetransfer_link)}</span></p>'
         )
     elif wetransfer_error:
         files_link_html = (
-            f'<p style="margin-top:10px;color:#c0392b;font-size:12px">'
+            f'<p style="margin-top:10px;color:#C2410C;font-size:12px">'
             f'Couldn\'t create a download link for the original files: {_e(wetransfer_error)} '
             f'(Small files may also be attached to this email.)</p>'
         )
@@ -491,21 +650,27 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
         files_link_html = ""
 
     def stat(label, value, note=""):
-        note_html_ = f'<div style="font-size:11px;color:#78909c;margin-top:2px">{note}</div>' if note else ""
-        return (f'<td style="border:1px solid #dfe6ea;background:#f7f9fa;padding:10px 12px;text-align:center;'
-                f'vertical-align:top"><div style="font-size:12px;color:#546e7a">{label}</div>'
-                f'<div style="font-size:22px;font-weight:bold;color:#2c3e50">{value:,}</div>{note_html_}</td>')
+        note_html_ = f'<div style="font-size:11px;color:#6B6480;margin-top:2px">{note}</div>' if note else ""
+        return (f'<td style="border:1px solid #F0E2D6;background:#FDEDE1;padding:11px 14px;text-align:center;'
+                f'vertical-align:top"><div style="font-size:12px;color:#6B6480">{label}</div>'
+                f'<div style="font-size:23px;font-weight:bold;color:#1C0072">{value:,}</div>{note_html_}</td>')
     totals_html = (
         '<table style="width:auto;margin:8px 0 14px"><tr>'
         + stat("Pages / items", totals["pages"])
         + stat("Sheets of paper", totals["sheets"], "estimate")
-        + stat("Folders", totals["folders_needed"], FOLDERS_EXPLANATION)
+        + stat("Folders", totals["folders_needed"],
+               FOLDERS_EXPLANATION + (f", plus {totals['separate_documents']} "
+                                      f"{structure.SEPARATE_BINDING.lower()}"
+                                      if totals["separate_documents"] else ""))
         + stat("Tabs", totals["tabs"], "one per folder")
         + stat("Dividers", totals["dividers"], "one per document")
         + stat("Files", totals["files"])
         + "</tr></table>"
-        + f'<p style="font-size:12px;color:#777;margin:0 0 8px">Sheets of paper: {SHEETS_EXPLANATION}.'
-        + (f' &nbsp;<span class="badge">{totals["flagged"]} flagged for review</span>' if totals["flagged"] else "")
+        + f'<p style="font-size:12px;color:#6B6480;margin:0 0 8px">Sheets of paper: {SHEETS_EXPLANATION}.'
+        + (f' &nbsp;<span class="badge">{totals["needs_decision"]} need a decision</span>'
+           if totals["needs_decision"] else "")
+        + (f' &nbsp;<span class="badge grey">{totals["not_countable"]} not countable, passed on anyway</span>'
+           if totals["not_countable"] else "")
         + "</p>"
     )
 
@@ -541,10 +706,125 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
                        f'<td>{len(suggestions)} size{"" if len(suggestions) == 1 else "s"}</td>'
                        f'<td class="qty">{sum(g["qty"] for g in groups)}</td></tr>')
         scaling_body = (
-            '<p style="font-size:12px;color:#777;margin:0 0 8px">Sizes that don\'t match a recognised '
+            '<p style="font-size:12px;color:#6B6480;margin:0 0 8px">Sizes that don\'t match a recognised '
             'size, and what would fit them, with a subtotal for each suggestion. Shown on its own, not '
             'counted into the totals above.</p>'
             f'<table><tr><th>Suggestion</th><th>Size</th><th>Quantity</th></tr>{scale_rows}</table>')
+
+    duplicates = structure.find_possible_duplicates(documents)
+    duplicates_body = ""
+    if duplicates:
+        dup_rows = ""
+        for group in duplicates:
+            verdict = ("same file size too - almost certainly the same file"
+                       if group["identical_files"] else "same pages and sizes - check they're not the same job twice")
+            for i, d in enumerate(group["documents"]):
+                first = ' class="subtotal"' if i == 0 else ""
+                dup_rows += (f'<tr{first}><td>{_e(d["name"])}</td><td>{_e(d["folder"])}</td>'
+                             f'<td class="qty">{group["pages"]}</td><td>{_mb(d.get("bytes"))}</td>'
+                             f'<td>{verdict if i == 0 else ""}</td></tr>')
+        saved = sum(g["extra_pages"] for g in duplicates)
+        duplicates_body = (
+            f'<p style="font-size:12px;color:#6B6480;margin:0 0 8px">Documents with the same number of pages, '
+            f'the same sizes, in the same order - so they may be copies of each other (two revisions, or '
+            f'high and low resolution versions of the same thing). Printing one of each would save about '
+            f'{_plural(saved, "page")}. Nothing has been left out of the totals.</p>'
+            f'<table><tr><th>Document</th><th>Folder</th><th>Pages</th><th>File size</th>'
+            f'<th></th></tr>{dup_rows}</table>')
+
+    split_combined = structure.find_split_and_combined(documents)
+    if split_combined:
+        sc_rows = "".join(
+            f'<tr><td>{_e(item["document"])}</td><td>{_e(item["folder"])}</td>'
+            f'<td class="qty">{item["pages"]}</td>'
+            f'<td>also here as {item["parts"]} separate files totalling {item["part_pages"]} pages, '
+            f'in {_e(item["where"])}</td></tr>' for item in split_combined)
+        duplicates_body += (
+            '<h4 style="margin:18px 0 6px;color:#1C0072">The same document, whole and in pieces</h4>'
+            '<p style="font-size:12px;color:#6B6480;margin:0 0 8px">A file that looks like a complete document, '
+            'where the same document is also present split into chapters. Print both and you print it twice.</p>'
+            f'<table><tr><th>Document</th><th>Folder</th><th>Pages</th><th></th></tr>{sc_rows}</table>')
+
+    section_body = ""
+    section_list = structure.sections(documents)
+    if len(section_list) > 1:
+        blocks = ""
+        for name, docs in section_list:
+            section_rows = [r for d in docs for r in d.rows]
+            rows_html = ""
+            for entry in build_size_summary(section_rows):
+                cls = ' class="nonstandard-summary"' if not entry["is_standard"] else ""
+                label = entry["label"] + (" (total)" if entry["breakdown"] else "")
+                rows_html += f'<tr{cls}><td>{_e(label)}</td><td class="qty">{entry["qty"]}</td></tr>'
+                for size_label, qty in entry["breakdown"]:
+                    rows_html += (f'<tr class="nonstandard-sub"><td style="padding-left:28px">'
+                                  f'{_e(size_label)}</td><td class="qty">{qty}</td></tr>')
+            blocks += (f'<h4 style="margin:14px 0 6px;color:#1C0072">&#128193; {_e(name)}'
+                       f'<span style="font-weight:normal;font-size:12px;color:#607d8b"> &middot; '
+                       f'{_plural(len(docs), "document")} &middot; {_plural(len(section_rows), "page")} '
+                       f'&middot; {_plural(estimate_sheets(section_rows), "sheet")}</span></h4>'
+                       f'<table style="max-width:520px"><tr><th>Size</th><th>Quantity</th></tr>{rows_html}</table>')
+        section_body = ('<p style="font-size:12px;color:#6B6480;margin:0 0 8px">The same sizes, split by '
+                        'top-level folder, so each chapter can be priced on its own.</p>' + blocks)
+
+    separate = structure.separate_documents(documents)
+    separate_ids = {id(entry["document"]) for entry in separate}
+    binder_rows = [r for d in documents if id(d) not in separate_ids for r in d.rows]
+    small_rows = [r for r in binder_rows if r.matched_size in DOUBLE_SIDED_SIZES]
+    a3_rows = [r for r in binder_rows if r.matched_size == "A3"]
+    other_rows = [r for r in binder_rows
+                  if r.matched_size not in DOUBLE_SIDED_SIZES and r.matched_size != "A3"
+                  and r.width_mm is not None]
+    standard_rows = ""
+    for label, subset, note in (
+            ("A4 and smaller, printed double-sided", small_rows, "two pages to a sheet, within each document"),
+            ("A3 plans, single-sided and folded to A4", a3_rows, "one page to a sheet"),
+            ("Larger formats, folded to keep their scale", other_rows, "one page to a sheet")):
+        if not subset:
+            continue
+        standard_rows += (f'<tr><td>{label}</td><td class="qty">{len(subset):,}</td>'
+                          f'<td class="qty">{estimate_sheets(subset):,}</td>'
+                          f'<td style="font-size:12px;color:#6B6480">{note}</td></tr>')
+    binder_total = (f'<tr class="subtotal"><td><b>Into binders</b></td>'
+                    f'<td class="qty">{len(binder_rows):,}</td>'
+                    f'<td class="qty">{totals["sheets_in_binders"]:,}</td>'
+                    f'<td style="font-size:12px;color:#6B6480">'
+                    f'{_plural(totals["folders_needed"], "binder")} at {SHEETS_PER_FOLDER} sheets each, '
+                    f'{_plural(totals["tabs"], "tab")}, {_plural(totals["dividers"], "divider")}</td></tr>')
+    standard_body = (
+        '<p style="font-size:12px;color:#6B6480;margin:0 0 8px">What we would produce from these files, the way '
+        'planning sets are always made up. The totals above count what\'s in the files; this is the job.</p>'
+        f'<table><tr><th>In the binders</th><th>Pages</th><th>Sheets</th><th></th></tr>'
+        f'{standard_rows}{binder_total}</table>')
+    if separate:
+        sep_rows = "".join(
+            f'<tr><td>{_e(entry["name"])}</td><td>{_e(entry["folder"])}</td>'
+            f'<td style="font-size:12px">{_e(entry["kind"])}</td>'
+            f'<td class="qty">{entry["pages"]}</td><td>{_e(entry["binding"])}</td>'
+            f'<td style="font-size:12px;color:#8a5a00">{_e(entry["note"])}</td></tr>'
+            for entry in separate)
+        standard_body += (
+            f'<h4 style="margin:18px 0 6px;color:#1C0072">Produced separately '
+            f'<span style="font-weight:normal;font-size:12px;color:#607d8b">&middot; '
+            f'{_plural(len(separate), "document")} &middot; {_plural(sum(e["pages"] for e in separate), "page")}'
+            f'</span></h4>'
+            '<p style="font-size:12px;color:#6B6480;margin:0 0 8px">Design and access statements and '
+            'non-technical summaries are bound as their own documents, so they are not counted into the '
+            'binders above. They still get a tab in the set.</p>'
+            f'<table><tr><th>Document</th><th>Folder</th><th>What it is</th><th>Pages</th>'
+            f'<th>Binding</th><th></th></tr>{sep_rows}</table>')
+    else:
+        standard_body += ('<p style="font-size:13px;color:#555">No design and access statement or '
+                          'non-technical summary spotted in this job, so everything goes into the binders.</p>')
+    if totals["needs_decision"] or totals["not_countable"]:
+        standard_body += (
+            f'<h4 style="margin:18px 0 6px;color:#1C0072">Before we print</h4>'
+            f'<ul style="font-size:14px;margin:0;padding-left:20px">'
+            + (f'<li><b>{totals["needs_decision"]}</b> item(s) need a decision - odd sizes, unreadable files '
+               f'and estimated sizes. See Suggested scaling.</li>' if totals["needs_decision"] else "")
+            + (f'<li><b>{totals["not_countable"]}</b> file(s) we can\'t count - they are passed on with the '
+               f'job and listed in the full breakdown.</li>' if totals["not_countable"] else "")
+            + '</ul>')
 
     tree = structure.build_tree(documents)
     tree_body = ""
@@ -556,7 +836,7 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
                           f'folder ({_plural(loose_pages, "page")}).</p>')
         tree_body += "</div>"
         if collapsible:
-            tree_body = '<p style="font-size:12px;color:#777;margin:0 0 8px">Click &ldquo;show files&rdquo; to see the documents in a folder.</p>' + tree_body
+            tree_body = '<p style="font-size:12px;color:#6B6480;margin:0 0 8px">Click &ldquo;show files&rdquo; to see the documents in a folder.</p>' + tree_body
 
     sizes_body = f"""<table>
       <tr><th>Size</th><th>Quantity</th><th>Flag</th></tr>
@@ -575,6 +855,8 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
         heading = _e(title)
 
     html = f"""<html><head><meta charset="utf-8">{style}</head><body>
+    {_report_bar(display_ref)}
+    <div class="fp-body">
     <h2>{heading}</h2>
     {plans_html}
     {count_only_banner}
@@ -586,16 +868,20 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
       {files_link_html}
     </div>
 
-    {_sections([(f"Spreadsheets ({len(spreadsheets)})", spreadsheet_body),
+    {_sections([("As per the Standard", standard_body),
+                (f"Spreadsheets ({len(spreadsheets)})", spreadsheet_body),
                 ("Quantity by size", sizes_body),
+                ("Sizes by section", section_body),
                 ("Suggested scaling", scaling_body),
+                (f"Possible duplicates ({len(duplicates)})", duplicates_body),
                 ("Folder structure", tree_body),
                 ("Full breakdown", breakdown_body)], collapsible)}
-    <p style="margin-top:16px;font-size:12px;color:#777">
+    <p style="margin-top:16px;font-size:12px;color:#6B6480">
       {APP_NAME} V{VERSION}. Full-size estimates for images and unformatted spreadsheets are approximations - see the
       accompanying README for details.
       {"Files used for this page count were analysed and then deleted immediately - nothing was kept."
        if count_only else "The portal deletes its own copy of the original files once they've been passed on."}
     </p>
+    </div>
     </body></html>"""
     return html

@@ -1,6 +1,12 @@
 """
-Generates the short, human-friendly reference number shown to Kaye in each
-report/email - format DDMMYY-NNNNN, e.g. 160926-00001, 160926-00002, ...
+Generates the short, human-friendly reference number shown in each report and
+email - format FP-NNNNN, e.g. FP-24001, FP-24002, ... as set out in the brand
+guide. The prefix and the number it counts up from are both configurable
+(REFERENCE_PREFIX and REFERENCE_START), so the series can be moved without
+touching anything else.
+
+References issued before this format are untouched: they're stored with each
+job, so old links and old emails still match.
 
 This is deliberately kept SEPARATE from the internal submission folder name
 (still the old timestamp+random id). That folder name is what guarantees two
@@ -23,7 +29,6 @@ lost or overwritten, unlike if it were used as the actual storage key.
 import os
 import fcntl
 import threading
-from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 COUNTER_FILE = os.path.join(BASE_DIR, "submission_counter.txt")
@@ -35,6 +40,17 @@ _lock = threading.Lock()
 
 
 REMOTE_KEY = "meta/reference-counter.txt"
+
+# "FP-24001" and up. The start is an offset, not a floor: the counter itself
+# still goes 1, 2, 3..., and this is simply added to it, so the series reads as
+# an established one rather than starting at FP-00001.
+PREFIX = os.environ.get("REFERENCE_PREFIX", "FP")
+START = int(os.environ.get("REFERENCE_START", "24000"))
+
+
+def format_reference(number):
+    """Turns a counter value into the reference clients see."""
+    return f"{PREFIX}-{START + int(number):05d}"
 
 
 def _remote_value():
@@ -63,7 +79,7 @@ def _save_remote(value):
 
 
 def next_reference_number():
-    """Returns the next reference number as a string, e.g. "160926-00001"."""
+    """Returns the next reference number as a string, e.g. "FP-24001"."""
     with _lock:
         with open(COUNTER_FILE, "a+") as f:
             fcntl.flock(f, fcntl.LOCK_EX)
@@ -80,7 +96,4 @@ def next_reference_number():
             finally:
                 fcntl.flock(f, fcntl.LOCK_UN)
     _save_remote(next_value)
-
-    date_part = datetime.now().strftime("%d%m%y")
-    num_part = str(next_value).zfill(5)
-    return f"{date_part}-{num_part}"
+    return format_reference(next_value)

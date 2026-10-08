@@ -70,6 +70,7 @@ class Row:
     is_standard: bool = True
     flagged: bool = False
     notes: str = ""
+    source_bytes: int = None   # how big the file is on disk, for spotting copies
 
     def as_dict(self):
         d = asdict(self)
@@ -77,6 +78,17 @@ class Row:
             if d[k] is not None:
                 d[k] = round(d[k], 1)
         return d
+
+
+# The brand guide's wording for a file we can't open (page 7): say what to do
+# next, don't just report a failure. The technical reason is kept in brackets
+# because the studio reads the same report.
+UNREADABLE = ("We can't open this file. It may be password-protected. Remove the password and "
+              "check it in again.")
+
+
+def _unreadable(kind, error):
+    return f"{UNREADABLE} ({kind}: {error})"
 
 
 def analyze_pdf(path, source_file, location=""):
@@ -112,7 +124,7 @@ def analyze_pdf(path, source_file, location=""):
             ))
     except Exception as e:
         rows.append(Row(source_file, location, "PDF", "Whole document",
-                         flagged=True, notes=f"Could not read PDF: {e}"))
+                         flagged=True, notes=_unreadable("PDF", e)))
     finally:
         try:
             pdf_file.close()
@@ -151,7 +163,7 @@ def analyze_image(path, source_file, location=""):
             ))
     except Exception as e:
         rows.append(Row(source_file, location, "Image", "Whole file",
-                         flagged=True, notes=f"Could not read image: {e}"))
+                         flagged=True, notes=_unreadable("Image", e)))
     return rows
 
 
@@ -200,7 +212,7 @@ def analyze_pptx(path, source_file, location=""):
         ))
     except Exception as e:
         rows.append(Row(source_file, location, "PPTX", "Whole file",
-                         flagged=True, notes=f"Could not read PPTX: {e}"))
+                         flagged=True, notes=_unreadable("PowerPoint", e)))
     return rows
 
 
@@ -389,7 +401,7 @@ def analyze_xlsx(path, source_file, location=""):
                 ))
     except Exception as e:
         rows.append(Row(source_file, location, "Excel", "Whole file",
-                         flagged=True, notes=f"Could not read spreadsheet: {e}"))
+                         flagged=True, notes=_unreadable("Spreadsheet", e)))
     return rows
 
 
@@ -482,11 +494,14 @@ def analyze_zip(path, source_file, location="", depth=0, on_item=None):
                                                 location=inner_location + " > ", depth=depth + 1,
                                                 on_item=on_item))
                     else:
-                        rows.extend(DISPATCH[ext](entry_path, source_file, location=inner_location))
+                        entry_rows = DISPATCH[ext](entry_path, source_file, location=inner_location)
+                        for r in entry_rows:
+                            r.source_bytes = info.file_size
+                        rows.extend(entry_rows)
                 except Exception as e:
                     rows.append(Row(source_file, inner_location, ext.lstrip(".").upper() or "Unknown",
                                      "Whole file", flagged=True,
-                                     notes=f"Couldn't read this file inside the archive: {e}"))
+                                     notes=_unreadable("inside the ZIP", e)))
                 finally:
                     # One file out of the archive at a time.
                     if entry_path:
@@ -496,7 +511,7 @@ def analyze_zip(path, source_file, location="", depth=0, on_item=None):
                             pass
     except Exception as e:
         rows.append(Row(source_file, location, "ZIP", "Whole archive",
-                         flagged=True, notes=f"Could not open archive: {e}"))
+                         flagged=True, notes=_unreadable("ZIP", e)))
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
     if not rows:
@@ -513,6 +528,14 @@ def analyze_file(path, original_filename, on_item=None):
         size = os.path.getsize(path)
     except OSError:
         size = 0
+    rows = _analyze_file_inner(path, original_filename, ext, size, on_item)
+    for r in rows:
+        if r.source_bytes is None and not r.location:
+            r.source_bytes = size   # files inside a ZIP set their own
+    return rows
+
+
+def _analyze_file_inner(path, original_filename, ext, size, on_item=None):
     if size > MAX_ANALYSE_BYTES and ext != ".zip":
         return [Row(original_filename, "", ext.lstrip(".").upper() or "Unknown", "Whole file", flagged=True,
                     notes=(f"File is {size / 1024 / 1024:.0f} MB, too large to open safely here - it's included "

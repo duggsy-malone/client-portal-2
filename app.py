@@ -37,7 +37,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
-from flask import Flask, request, jsonify, render_template, redirect, url_for, Response
+from flask import Flask, request, jsonify, render_template, redirect, url_for, Response, send_from_directory
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from analyzer import analyze_file
@@ -48,6 +48,7 @@ from reference_number import next_reference_number
 import r2_storage
 import history
 import structure
+import branding
 from version import APP_NAME, VERSION
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -181,7 +182,11 @@ def _make_token(submission_id, reference_number):
 def _check_token(submission_id, reference_number, token):
     if not (isinstance(submission_id, str) and re.fullmatch(r"\d{8}-\d{6}-[0-9a-f]{6}", submission_id)):
         return False
-    if not (isinstance(reference_number, str) and re.fullmatch(r"\d{6}-\d{5,}", reference_number)):
+    # Two shapes are allowed: the current "FP-24091", and the older
+    # "160926-00001" that jobs started before the change still carry. An
+    # upload in flight during a deploy must not stop working.
+    if not (isinstance(reference_number, str)
+            and re.fullmatch(r"[A-Za-z]{1,8}-\d{4,10}|\d{6}-\d{5,10}", reference_number)):
         return False
     return hmac.compare_digest(_make_token(submission_id, reference_number), str(token or ""))
 
@@ -257,9 +262,28 @@ def _start_background_jobs():
     _ensure_background_started()
 
 
+@app.context_processor
+def _brand_values():
+    """Colours, logos and wording for every page - see branding.py."""
+    return {"brand": branding.as_dict(), "app_name": APP_NAME, "version": VERSION}
+
+
 @app.route("/")
 def index():
-    return render_template("index.html", version=VERSION, app_name=APP_NAME)
+    return render_template("index.html")
+
+
+@app.route("/standard")
+def standard():
+    """How planning sets are produced - linked from the upload page."""
+    return render_template("standard.html")
+
+
+@app.route("/favicon.ico")
+def favicon():
+    """Browsers ask for this by name, hence the fixed address."""
+    return send_from_directory(os.path.join(BASE_DIR, "static", "brand"), "favicon.ico",
+                               mimetype="image/vnd.microsoft.icon")
 
 
 @app.route("/health")
@@ -490,7 +514,7 @@ def _record_from_status(status):
 
 def _progress_updater(status):
     """Returns update(text, force=False): records what a quote job is doing
-    right now (e.g. "Counting pages (120 of 433)") in the log and on the
+    right now (e.g. "Running pre-flight (120 of 433)") in the log and on the
     attention page. Written at most every PROGRESS_SAVE_SECONDS unless
     `force`, so hundreds of files don't mean hundreds of storage writes."""
     lock = threading.Lock()
@@ -660,11 +684,13 @@ def _send_count_notice(status, totals):
                 + f"<h3>Totals</h3><table>{totals_rows}</table>"
                 + f"<p style='font-size:12px;color:#777'>{APP_NAME} V{VERSION}. "
                   f"This count is also in {html_lib.escape(status.get('portal_url', ''))}/admin/submissions.</p>")
-        subject = (f"[{APP_NAME} page count {ref}] {contact.get('subject') or ''} - "
+        counted = status.get("total_items")
+        pages_part = f" ({counted:,} pages)" if isinstance(counted, int) else ""
+        subject = (f"Page count: {ref}{pages_part} - {contact.get('subject') or ''} - "
                    f"{status.get('file_count') or 0} file(s)")
         sent, message = send_report_email(
             subject=subject,
-            html_body=f"<html><body style='font-family:Arial,sans-serif'>{body}</body></html>",
+            html_body=_email_wrapper(body, heading=f"Page count: {ref}"),
             csv_attachment_name=f"page_count_{ref}.csv",
             csv_attachment_bytes=("Page count," + str(ref) + "\n"
                                   + "\n".join(f"{label},{value}" for label, value in figures
@@ -691,7 +717,7 @@ def _inside_zip_progress(stage, file_number, file_total, file_name):
             return
         last[0] = now
         of_files = f"file {file_number} of {file_total}: " if file_total > 1 else ""
-        stage(f"Counting pages ({of_files}{position} of {items} inside {file_name})...")
+        stage(f"Running pre-flight ({of_files}{position} of {items} inside {file_name})...")
     return on_item
 
 
@@ -756,7 +782,7 @@ def _run_count_job(submission_id, status=None):
             name = _original_name(obj["key"])
             size_mb = obj["size"] / 1024 / 1024
             logger.info(f"{label}: file {i} of {total} - {name} ({size_mb:.1f} MB), memory {_rss_mb():.0f} MB")
-            stage(f"Counting pages ({i} of {total})...")
+            stage(f"Running pre-flight ({i} of {total})...")
             path = _unique_dest(local_dir, name)
             r2_storage.download(obj["key"], path)
             inside = _inside_zip_progress(stage, i, total, name)
@@ -960,8 +986,8 @@ def _mark_needs_attention(status, reason, send_alert=True):
 def _send_alert(reference_number, subject, html_body):
     try:
         sent, message = send_report_email(
-            subject=f"[{APP_NAME} quote {reference_number}] {subject}",
-            html_body=f"<html><body style='font-family:Arial,sans-serif'>{html_body}</body></html>",
+            subject=f"{reference_number} - {subject}",
+            html_body=_email_wrapper(html_body, heading=f"{reference_number} - needs a look"),
             csv_attachment_name=f"alert_{reference_number}.csv",
             csv_attachment_bytes=f"Quote request,{reference_number}\nStatus,Needs attention\n".encode("utf-8"),
             original_files=[],
@@ -987,7 +1013,7 @@ def process_submission(submission_id, saved_paths, client_note, contact, referen
         all_rows = []
         total = len(saved_paths)
         for i, path in enumerate(saved_paths, start=1):
-            stage(f"Counting pages ({i} of {total})", force=(i == 1))
+            stage(f"Running pre-flight ({i} of {total})", force=(i == 1))
             try:
                 size_mb = os.path.getsize(path) / 1024 / 1024
             except OSError:
@@ -999,7 +1025,7 @@ def process_submission(submission_id, saved_paths, client_note, contact, referen
                             f"{os.path.basename(path)} ({size_mb:.1f} MB), memory {_rss_mb():.0f} MB")
             inside = _inside_zip_progress(lambda text: stage(text), i, total, os.path.basename(path))
             all_rows.extend(analyze_file(path, os.path.basename(path), on_item=inside))
-        stage(f"Counting pages done ({total} of {total})", force=True)
+        stage(f"Pre-flight complete ({total} of {total})", force=True)
         if on_analysed:
             try:
                 on_analysed(all_rows)
@@ -1030,8 +1056,13 @@ def process_submission(submission_id, saved_paths, client_note, contact, referen
         csv_bytes = rows_to_csv(all_rows, folder_info, plans_to_scale).encode("utf-8")
         csv_name = f"analysis_{reference_number}.csv"
         flagged = sum(1 for r in all_rows if r.flagged)
-        subject_line = (f"[{APP_NAME} quote {reference_number}] {contact.get('subject') or ''} - "
-                        f"{len(saved_paths)} file(s)" + (f" - {flagged} flagged for review" if flagged else "")
+        # The brand guide's subject line: "Cleared for print: FP-24091 (16 pages)".
+        # When something needs a decision it leads with that instead, because
+        # "cleared" would be the wrong word for a job that isn't.
+        pages = job_totals(all_rows, folder_info)["pages"]
+        lead = (f"Needs a look: {reference_number} ({pages:,} pages, {flagged} flagged)" if flagged
+                else f"Cleared for print: {reference_number} ({pages:,} pages)")
+        subject_line = (f"{lead} - {contact.get('subject') or ''} - {len(saved_paths)} file(s)"
                         + {True: " - TO SCALE", False: " - A3 FOLDED", None: ""}[plans_to_scale])
         files_to_attach = [] if wetransfer_link else saved_paths
         if outcome is not None:
@@ -1178,10 +1209,9 @@ def attention():
     if not ADMIN_KEY:
         return "Not found.", 404
     if not _admin_ok():
-        return render_template("admin_login.html", wrong=bool(request.values.get("key")), version=VERSION, app_name=APP_NAME)
+        return render_template("admin_login.html", wrong=bool(request.values.get("key")))
     if not r2_storage.is_configured():
-        return render_template("admin_attention.html", jobs=[], key=request.values["key"], storage_missing=True,
-                               version=VERSION, app_name=APP_NAME)
+        return render_template("admin_attention.html", jobs=[], key=request.values["key"], storage_missing=True)
     groups = {}
     for obj in r2_storage.list_objects("incoming/"):
         parts = obj["key"].split("/")
@@ -1206,8 +1236,7 @@ def attention():
             "total_mb": round(sum(o["size"] for o in files) / 1024 / 1024, 1),
         })
     jobs.sort(key=lambda j: (j["status"] != "needs_attention", j["updated_at"]), reverse=False)
-    return render_template("admin_attention.html", jobs=jobs, key=request.values["key"], storage_missing=False,
-                           version=VERSION, app_name=APP_NAME)
+    return render_template("admin_attention.html", jobs=jobs, key=request.values["key"], storage_missing=False)
 
 
 @app.route("/admin/attention/files")
@@ -1271,15 +1300,49 @@ def _history_link(portal_url, email):
     return f"{portal_url}/my-submissions?{urlencode(params)}"
 
 
-def _email_wrapper(inner_html):
-    return ("<html><body style=\"font-family:Arial,Helvetica,sans-serif;color:#222;line-height:1.5;"
-            "max-width:560px\">" + inner_html + "</body></html>")
+def _email_wrapper(inner_html, heading=""):
+    """Wraps an email in the brand's navy header bar and endorsement footer
+    (brand guide page 9).
+
+    Everything here is table markup and inline styles, with no web fonts and
+    no stylesheet, because mail programs strip all three. The wordmark is set
+    as text rather than an image for the same reason - most inboxes block
+    images until the reader asks for them, and a header that isn't there is
+    worse than one in Arial. If EMAIL_HEADER_URL is filled in, the image is
+    used instead, with the text as its alt.
+    """
+    b = branding
+    if b.EMAIL_HEADER_URL:
+        header = (f'<img src="{html_lib.escape(b.EMAIL_HEADER_URL)}" alt="{APP_NAME}" width="560" '
+                  f'style="display:block;width:100%;max-width:560px;height:auto;border:0">')
+    else:
+        header = (f'<div style="font-size:21px;font-weight:bold;letter-spacing:-0.02em;color:#ffffff">'
+                  f'{b.WORDMARK_LEAD}<span style="color:{b.COLOUR_BEACON}">{b.WORDMARK_TAIL}</span></div>'
+                  f'<div style="font-size:10px;font-weight:bold;color:#B9AEE6;padding-top:2px">'
+                  f'{b.ENDORSEMENT}</div>')
+    heading_html = (f'<h1 style="margin:0 0 14px;font-size:21px;line-height:1.2;color:{b.COLOUR_NAVY}">'
+                    f'{html_lib.escape(heading)}</h1>') if heading else ""
+    return (
+        f'<html><body style="margin:0;padding:0;background:{b.COLOUR_PAPER}">'
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"'
+        f' style="background:{b.COLOUR_PAPER}"><tr><td align="left" style="padding:22px 16px">'
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="560"'
+        f' style="max-width:560px;background:#ffffff;border:1px solid #F0E2D6">'
+        f'<tr><td style="background:{b.COLOUR_NAVY};padding:15px 22px">{header}</td></tr>'
+        f'<tr><td style="padding:22px;font-family:{b.FONT_EMAIL};font-size:15px;line-height:1.55;'
+        f'color:{b.COLOUR_NAVY}">{heading_html}{inner_html}</td></tr>'
+        f'<tr><td style="border-top:1px solid #F0E2D6;padding:14px 22px;'
+        f'font-family:{b.FONT_EMAIL};font-size:12px;color:#6B6480">'
+        f'<b style="color:{b.COLOUR_NAVY}">{b.PARENT_STRAPLINE}</b><br>Sent from {APP_NAME}'
+        f'</td></tr></table></td></tr></table></body></html>')
 
 
 def _button(url, text):
+    """Orange button, navy text - the guide is explicit that text on orange is
+    never white below display sizes."""
     return (f'<p style="margin:22px 0"><a href="{html_lib.escape(url)}" style="display:inline-block;'
-            f'background:#2980b9;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;'
-            f'font-weight:bold">{html_lib.escape(text)}</a></p>')
+            f'background:{branding.COLOUR_PRIMARY};color:{branding.COLOUR_NAVY};padding:12px 20px;'
+            f'border-radius:8px;text-decoration:none;font-weight:bold">{html_lib.escape(text)}</a></p>')
 
 
 def _send_confirmation_email(contact, reference_number, portal_url, plans_to_scale=None):
@@ -1293,27 +1356,28 @@ def _send_confirmation_email(contact, reference_number, portal_url, plans_to_sca
         subject_line = contact.get("subject") or "your quote request"
         body = _email_wrapper(
             f"<p>Hi {html_lib.escape(first_name) or 'there'},</p>"
-            f"<p>Thanks - we've received the files for <b>{html_lib.escape(subject_line)}</b>. "
-            f"Your reference number is <b>{html_lib.escape(reference_number)}</b>. "
+            f"<p>Your files for <b>{html_lib.escape(subject_line)}</b> are with the studio. "
+            f"Your reference is <b>{html_lib.escape(reference_number)}</b>. "
             f"We'll be in touch with your quote shortly.</p>"
             + ({True: "<p>You asked for plans to be <b>printed to scale</b>.</p>",
                 False: "<p>You didn't tick <b>plans printed to scale</b>, so plans will be printed at A3 and "
                        "folded. If that's not right, just reply to let us know.</p>",
                 None: ""}[plans_to_scale]) +
             f"<p>You can see everything you've sent us from this email address here:</p>"
-            + _button(link, "View my submissions") +
+            + _button(link, "View my jobs") +
             f"<p style=\"font-size:12px;color:#777\">This link is private to you and works for "
             f"{history.LINK_VALID_DAYS} days. You can get a new one any time at "
-            f"{html_lib.escape(portal_url)}/my-submissions</p>")
+            f"{html_lib.escape(portal_url)}/my-submissions</p>",
+            heading="Sent to the studio")
         sent, message = send_client_email(contact.get("email"),
-                                          f"{APP_NAME}: we've received your files - ref {reference_number}", body)
+                                          f"Sent to the studio: {reference_number}", body)
         logger.info(f"Confirmation email for {reference_number}: sent={sent} - {message}")
     except Exception as e:
         logger.warning(f"Confirmation email for {reference_number} failed: {e}")
 
 
 CLIENT_STATUS_LABELS = {
-    "count": {"processing": "Counting", "done": "Page count complete", "failed": "Didn't finish - please try again"},
+    "count": {"processing": "Pre-flight", "done": "Page count complete", "failed": "Didn't finish - please try again"},
     "quote": {},  # quotes always show "Received" - the internal steps are ours to worry about
 }
 
@@ -1368,22 +1432,22 @@ def _link_request_allowed(email_key):
 @app.route("/my-submissions", methods=["GET"])
 def my_submissions():
     if not history.is_enabled():
-        return _no_store(Response(render_template("my_submissions.html", version=VERSION, app_name=APP_NAME, mode="unavailable")))
+        return _no_store(Response(render_template("my_submissions.html", mode="unavailable")))
     c, x, t = request.args.get("c"), request.args.get("x"), request.args.get("t")
     if not (c or x or t):
-        return _no_store(Response(render_template("my_submissions.html", version=VERSION, app_name=APP_NAME, mode="ask")))
+        return _no_store(Response(render_template("my_submissions.html", mode="ask")))
     ok, reason = history.check_link_params(_token_secret(), c, x, t)
     if not ok:
-        return _no_store(Response(render_template("my_submissions.html", version=VERSION, app_name=APP_NAME, mode="ask", link_problem=reason)))
+        return _no_store(Response(render_template("my_submissions.html", mode="ask", link_problem=reason)))
     try:
         records = history.list_for_client(c)
     except Exception as e:
         logger.error(f"History: couldn't list submissions - {e}")
-        return _no_store(Response(render_template("my_submissions.html", version=VERSION, app_name=APP_NAME, mode="error"), status=503))
+        return _no_store(Response(render_template("my_submissions.html", mode="error"), status=503))
     link_params = {"c": c, "x": x, "t": t}
     expires = datetime.fromtimestamp(int(x), timezone.utc).strftime("%d %B %Y")
     return _no_store(Response(render_template(
-        "my_submissions.html", version=VERSION, app_name=APP_NAME, mode="list", expires=expires,
+        "my_submissions.html", mode="list", expires=expires,
         submissions=[_client_view(r, link_params) for r in records])))
 
 
@@ -1401,7 +1465,7 @@ def my_submissions_request_link():
             logger.info("History link request skipped (too soon since the last one).")
     # The same reply whether or not that address has submissions, so the form
     # can't be used to find out who's a client.
-    return _no_store(Response(render_template("my_submissions.html", version=VERSION, app_name=APP_NAME, mode="sent")))
+    return _no_store(Response(render_template("my_submissions.html", mode="sent")))
 
 
 def _send_history_link(email, key, portal_url):
@@ -1412,10 +1476,11 @@ def _send_history_link(email, key, portal_url):
         link = _history_link(portal_url, email)
         body = _email_wrapper(
             "<p>Hi,</p><p>Here's your private link to see everything you've sent us from this email address:</p>"
-            + _button(link, "View my submissions") +
-            f"<p style=\"font-size:12px;color:#777\">The link works for {history.LINK_VALID_DAYS} days. "
-            f"If you didn't ask for it, you can ignore this email.</p>")
-        sent, message = send_client_email(email, f"{APP_NAME}: your submissions link", body)
+            + _button(link, "View my jobs") +
+            f"<p style=\"font-size:12px;color:#6B6480\">The link works for {history.LINK_VALID_DAYS} days. "
+            f"If you didn't ask for it, you can ignore this email.</p>",
+            heading="Your jobs link")
+        sent, message = send_client_email(email, f"{APP_NAME}: your jobs link", body)
         logger.info(f"History link email: sent={sent} - {message}")
     except Exception as e:
         logger.warning(f"History link email failed: {e}")
@@ -1452,11 +1517,11 @@ def admin_submissions():
         return "Not found.", 404
     if not _admin_ok():
         return render_template("admin_login.html", wrong=bool(request.values.get("key")),
-                               action=url_for("admin_submissions"), version=VERSION, app_name=APP_NAME)
+                               action=url_for("admin_submissions"))
     key = request.values["key"]
     if not history.is_enabled():
         return render_template("admin_submissions.html", key=key, storage_missing=True, rows=[], q="",
-                               kind="", total=0, page=1, pages=1, version=VERSION, app_name=APP_NAME)
+                               kind="", total=0, page=1, pages=1)
     q = (request.args.get("q") or "").strip()
     kind = request.args.get("kind") or ""
     try:
@@ -1484,7 +1549,7 @@ def admin_submissions():
         rows.append(dict(r, status_label=ADMIN_STATUS_LABELS.get(r.get("status"), r.get("status") or "?"),
                          created=(r.get("created_at") or "")[:16].replace("T", " ")))
     return render_template("admin_submissions.html", key=key, storage_missing=False, rows=rows, q=q, kind=kind,
-                           total=len(records), page=page, pages=pages, version=VERSION, app_name=APP_NAME)
+                           total=len(records), page=page, pages=pages)
 
 
 @app.route("/admin/submissions/report")
