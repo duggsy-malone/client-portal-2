@@ -41,6 +41,8 @@ def build_size_summary(rows):
     standard_flags = {}
     odd_sizes = {}
     for r in rows:
+        if _items(r) == 0:
+            continue    # a note about another size inside the same document
         if r.width_mm is None or r.height_mm is None:
             label = "Not sized (other file types, unreadable or empty - check manually)"
             is_standard = True  # not a "review this size" flag - different reason
@@ -50,7 +52,7 @@ def build_size_summary(rows):
             if not is_standard:
                 a, b = sorted((int(round(r.width_mm)), int(round(r.height_mm))))
                 odd_sizes[(a, b)] = odd_sizes.get((a, b), 0) + 1
-        counts[label] = counts.get(label, 0) + 1
+        counts[label] = counts.get(label, 0) + _items(r)
         standard_flags[label] = is_standard
 
     breakdown = [(f"{a} \u00d7 {b} mm", qty)
@@ -67,11 +69,20 @@ def build_size_summary(rows):
 # Sizes a printer would normally run double-sided. Everything larger (A3 and
 # up, drawings, banners) is assumed single-sided.
 DOUBLE_SIDED_SIZES = {"A4", "A5", "A6", "US Letter"}
-SHEETS_EXPLANATION = "A4 and smaller (US Letter counts as A4) printed double-sided, larger sizes single-sided"
+SHEETS_EXPLANATION = ("A4 and smaller (US Letter and US Legal count as A4) printed double-sided, "
+                      "larger sizes single-sided; PowerPoint slides are scaled to A4, one slide "
+                      "to a sheet")
 
 # One ring binder holds this many sheets of paper, printed on both sides.
 SHEETS_PER_FOLDER = 380
 FOLDERS_EXPLANATION = f"{SHEETS_PER_FOLDER} sheets per folder"
+
+
+def _items(row):
+    """How many pages/sides a row stands for. One for a PDF page or an image;
+    for a Word document, the whole document, since a .docx is a single row.
+    getattr keeps this working with rows built before the field existed."""
+    return getattr(row, "items", 1)
 
 
 def estimate_sheets(rows):
@@ -84,10 +95,13 @@ def estimate_sheets(rows):
         if r.width_mm is None or r.height_mm is None:
             continue
         doc = per_doc.setdefault((r.source_file, r.location), [0, 0])
-        if r.matched_size in DOUBLE_SIDED_SIZES:
-            doc[0] += 1
+        # PowerPoint is scaled to A4 and printed one slide to a sheet, so a
+        # deck is never counted two-up however small its slides are.
+        double_sided = r.matched_size in DOUBLE_SIDED_SIZES and not _is_slides(r)
+        if double_sided:
+            doc[0] += _items(r)
         else:
-            doc[1] += 1
+            doc[1] += _items(r)
     return sum((small + 1) // 2 + large for small, large in per_doc.values())
 
 
@@ -110,6 +124,35 @@ def flag_counts(rows):
     return needs_decision, not_countable
 
 
+def _pages(rows):
+    """Pages in a set of rows, respecting rows that stand for several pages."""
+    return sum(_items(r) for r in rows)
+
+
+def _is_slides(row):
+    """PowerPoint, which the Standard scales to A4 and prints one slide to a
+    sheet - so it is never counted two-up. Must agree with estimate_sheets."""
+    return (row.file_type or "").upper() == "PPTX"
+
+
+def standard_buckets(binder_rows):
+    """The rows of the 'As per the Standard' table: (label, rows, note).
+    One definition, used by both the report and the CSV."""
+    counted = [r for r in binder_rows if _items(r) > 0]
+    slides = [r for r in counted if _is_slides(r)]
+    rest = [r for r in counted if not _is_slides(r)]
+    small = [r for r in rest if r.matched_size in DOUBLE_SIDED_SIZES]
+    a3 = [r for r in rest if r.matched_size == "A3"]
+    other = [r for r in rest if r.matched_size not in DOUBLE_SIDED_SIZES
+             and r.matched_size != "A3" and r.width_mm is not None]
+    return (
+        ("A4 and smaller, printed double-sided", small, "two pages to a sheet, within each document"),
+        ("A3 plans, single-sided and folded to A4", a3, "one page to a sheet"),
+        ("PowerPoint slides, scaled to A4", slides, "one slide to a sheet"),
+        ("Larger formats, folded to keep their scale", other, "one page to a sheet"),
+    )
+
+
 def job_totals(rows, folder_info=None, documents=None):
     """The headline numbers shown together at the top of the report."""
     documents = documents if documents is not None else structure.build_documents(rows, folder_info)
@@ -122,7 +165,7 @@ def job_totals(rows, folder_info=None, documents=None):
     binder_rows = [r for d in documents if id(d) not in separate_ids for r in d.rows]
     sheets_in_binders = estimate_sheets(binder_rows)
     return {
-        "pages": len(rows),
+        "pages": sum(_items(r) for r in rows),
         "sheets": sheets,
         "sheets_in_binders": sheets_in_binders,
         "separate_documents": len(separate),
@@ -147,7 +190,10 @@ SLIDE_SUGGESTION = "Scale to A4 - PowerPoint slides"
 
 
 def _slide_count(row):
-    """"3 slide(s) @ deck size" -> 3. A deck is one row but several slides."""
+    """How many slides a deck row stands for. Reads the row's own count, and
+    falls back to the label for rows built before `items` existed."""
+    if getattr(row, "items", 1) > 1:
+        return row.items
     m = re.match(r"\s*(\d+)\s+slide", row.unit_label or "")
     return int(m.group(1)) if m else 1
 
@@ -168,7 +214,7 @@ def build_scaling_suggestions(rows):
             continue
         a, b = sorted((int(round(abs(r.width_mm))), int(round(abs(r.height_mm)))))
         key = (a, b, is_slides)
-        counts[key] = counts.get(key, 0) + (_slide_count(r) if is_slides else 1)
+        counts[key] = counts.get(key, 0) + (_slide_count(r) if is_slides else _items(r))
     entries = [{"size": f"{a} \u00d7 {b} mm" + (" (PowerPoint)" if is_slides else ""),
                 "qty": qty, "suggestion": SLIDE_SUGGESTION if is_slides else suggest_scale(a, b)}
                for (a, b, is_slides), qty in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
@@ -237,16 +283,10 @@ def rows_to_csv(rows, folder_info=None, plans_to_scale=None):
     writer.writerow(["", "Pages", "Sheets"])
     separate_ids = {id(e["document"]) for e in separate}
     binder_rows = [r for d in documents if id(d) not in separate_ids for r in d.rows]
-    for label, subset in (
-            ("A4 and smaller, printed double-sided",
-             [r for r in binder_rows if r.matched_size in DOUBLE_SIDED_SIZES]),
-            ("A3 plans, single-sided and folded to A4", [r for r in binder_rows if r.matched_size == "A3"]),
-            ("Larger formats, folded to keep their scale",
-             [r for r in binder_rows if r.width_mm is not None and r.matched_size != "A3"
-              and r.matched_size not in DOUBLE_SIDED_SIZES])):
+    for label, subset, _note in standard_buckets(binder_rows):
         if subset:
-            writer.writerow([label, len(subset), estimate_sheets(subset)])
-    writer.writerow(["Into binders", len(binder_rows), totals["sheets_in_binders"]])
+            writer.writerow([label, _pages(subset), estimate_sheets(subset)])
+    writer.writerow(["Into binders", _pages(binder_rows), totals["sheets_in_binders"]])
     writer.writerow(["Binders needed", totals["folders_needed"], FOLDERS_EXPLANATION])
     writer.writerow([f"Produced separately ({structure.SEPARATE_BINDING.lower()})",
                      totals["separate_documents"],
@@ -305,7 +345,7 @@ def rows_to_csv(rows, folder_info=None, plans_to_scale=None):
             section_rows = [r for d in docs for r in d.rows]
             for entry in build_size_summary(section_rows):
                 label = entry["label"] + (" (total)" if entry["breakdown"] else "")
-                writer.writerow([name, label, entry["qty"], len(docs), len(section_rows),
+                writer.writerow([name, label, entry["qty"], len(docs), _pages(section_rows),
                                  estimate_sheets(section_rows)])
                 for size_label, qty in entry["breakdown"]:
                     writer.writerow([name, "    " + size_label.replace("\u00d7", "x"), qty, "", "", ""])
@@ -761,7 +801,7 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
                                   f'{_e(size_label)}</td><td class="qty">{qty}</td></tr>')
             blocks += (f'<h4 style="margin:14px 0 6px;color:#1C0072">&#128193; {_e(name)}'
                        f'<span style="font-weight:normal;font-size:12px;color:#607d8b"> &middot; '
-                       f'{_plural(len(docs), "document")} &middot; {_plural(len(section_rows), "page")} '
+                       f'{_plural(len(docs), "document")} &middot; {_plural(_pages(section_rows), "page")} '
                        f'&middot; {_plural(estimate_sheets(section_rows), "sheet")}</span></h4>'
                        f'<table style="max-width:520px"><tr><th>Size</th><th>Quantity</th></tr>{rows_html}</table>')
         section_body = ('<p style="font-size:12px;color:#6B6480;margin:0 0 8px">The same sizes, split by '
@@ -770,23 +810,15 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
     separate = structure.separate_documents(documents)
     separate_ids = {id(entry["document"]) for entry in separate}
     binder_rows = [r for d in documents if id(d) not in separate_ids for r in d.rows]
-    small_rows = [r for r in binder_rows if r.matched_size in DOUBLE_SIDED_SIZES]
-    a3_rows = [r for r in binder_rows if r.matched_size == "A3"]
-    other_rows = [r for r in binder_rows
-                  if r.matched_size not in DOUBLE_SIDED_SIZES and r.matched_size != "A3"
-                  and r.width_mm is not None]
     standard_rows = ""
-    for label, subset, note in (
-            ("A4 and smaller, printed double-sided", small_rows, "two pages to a sheet, within each document"),
-            ("A3 plans, single-sided and folded to A4", a3_rows, "one page to a sheet"),
-            ("Larger formats, folded to keep their scale", other_rows, "one page to a sheet")):
+    for label, subset, note in standard_buckets(binder_rows):
         if not subset:
             continue
-        standard_rows += (f'<tr><td>{label}</td><td class="qty">{len(subset):,}</td>'
+        standard_rows += (f'<tr><td>{label}</td><td class="qty">{_pages(subset):,}</td>'
                           f'<td class="qty">{estimate_sheets(subset):,}</td>'
                           f'<td style="font-size:12px;color:#6B6480">{note}</td></tr>')
     binder_total = (f'<tr class="subtotal"><td><b>Into binders</b></td>'
-                    f'<td class="qty">{len(binder_rows):,}</td>'
+                    f'<td class="qty">{_pages(binder_rows):,}</td>'
                     f'<td class="qty">{totals["sheets_in_binders"]:,}</td>'
                     f'<td style="font-size:12px;color:#6B6480">'
                     f'{_plural(totals["folders_needed"], "binder")} at {SHEETS_PER_FOLDER} sheets each, '

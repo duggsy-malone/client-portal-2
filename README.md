@@ -132,10 +132,55 @@ This number is generated from a simple counter (`submission_counter.txt`, create
 
 Render wipes the server's disk on every redeploy, so once Cloudflare R2 is set up (see "Large files: Cloudflare R2"), a copy of the counter is also kept in R2 and numbering carries on after a redeploy instead of restarting at 00001. Without R2 it can still restart occasionally; that's cosmetic only, since reference numbers are never used to name or find files.
 
+## Word documents (why the page count is an estimate)
+
+A `.docx` doesn't contain a page count. It contains content, and the pages only exist once something lays it out - so the answer depends on the fonts installed, the paper size, the printer driver and even the Word version. Two people can open the same file and get different page counts.
+
+How far apart these can be, from a real test file: the count cached inside the file said **1 page**, the typed page breaks implied **9**, and it actually laid out to **16**.
+
+So the portal reads what a `.docx` genuinely does store, and is honest about the rest:
+
+| Read from the file | Reliability |
+|---|---|
+| `w:pgSz` - page width, height and orientation, per section | **Exact.** A4 portrait, A3 landscape and so on, straight from the markup. |
+| `w:lastRenderedPageBreak` - where Word put the breaks when it last repaginated | **Good.** When present, this is Word's own pagination, and the report drops the "at least". |
+| `w:br w:type="page"` plus section breaks | **A floor.** Reported as "at least N pages". |
+| `docProps/app.xml` `<Pages>` - the count cached by whatever last saved it | **Only as a cross-check.** Used if it's larger than what the breaks give, and the note always says the figure came from there. |
+
+Every Word row is flagged for review, the note says where the figure came from, and it asks for a PDF if the count matters. A Word document counts as **one row standing for N pages** - the `items` field on `Row` - so the page, sheet and binder totals use N, not 1.
+
+Older binary `.doc` files can't be opened at all (they aren't zipped XML); those get a note asking for a `.docx` or a PDF.
+
+The client sees this before they send, too: a Word file on the departures board gets a **Needs a look** pill with the same explanation, so it can be swapped for a PDF while that's still easy.
+
+**PowerPoint works the same way.** A deck is one row standing for all of its slides, so a 30-slide deck counts as 30 pages, not 1. Slides are scaled to A4 and printed **one slide to a sheet**, never two-up, so 30 slides is 30 sheets - `estimate_sheets` and the "As per the Standard" buckets both special-case `PPTX` so they agree, and the Standard table gives slides a row of their own.
+
+## Counting: one rule, everywhere
+
+Every figure in the report comes from the same place: a row's `items`, meaning how many pages that row stands for. A PDF page is one row and one page. A Word document and a PowerPoint deck are each a single row standing for all of their pages or slides, because neither can be split into rows.
+
+This matters because the figures used to be computed two different ways. `job_totals` counted `items`, while the "As per the Standard" table, the per-section figures and the `total_items` saved to each job all counted *rows* - so a job with a 200-page Word file and a 30-slide deck showed 231 pages at the top and 3 in the table underneath, and the client's email said "(1 pages)". Everything now goes through `_pages()` / `_items()`.
+
+The three Standard buckets are defined once, in `report.standard_buckets()`, and used by both the report and the CSV, so they can't drift apart - and PowerPoint is bucketed with A4 there, matching how `estimate_sheets` costs it.
+
+A row with `items = 0` is a note rather than a line item: it's how a Word document that changes page size part-way lists its other sizes without inventing a page. Those rows are excluded from the size summary and the Standard table, and appear only in the full breakdown.
+
+## Pages that arrive with bleed
+
+Artwork supplied for trimming is bigger than its finished size by twice the bleed on each axis, so an A4 page with 3 mm bleed arrives as **216 x 303 mm**. Those count as the trimmed size: 216 x 303 is an A4, 303 x 426 is an A3, and so on.
+
+The allowances checked are **3 mm and 5 mm** (`BLEED_ALLOWANCES_MM` in `paper_sizes.py`), each on top of the normal 3 mm matching tolerance, and the smaller is tried first. Matching stays orientation-agnostic, so a landscape 303 x 216 is an A4 with bleed too.
+
+A page matched this way is **not** flagged - it's a normal way to be supplied - but it carries a note saying so: *"Supplied with 3 mm bleed (216 x 303 mm), so it is counted as A4 and will need trimming."* Anything oversized by some other amount (8 mm, say) is still non-standard and still flagged.
+
+US Letter and US Legal both count as A4, in the totals as well as the label, and the sheets explanation in the report now says so.
+
 ## Known limitations (be aware of these before quoting off the report alone)
 
 - **JPG/PNG size is an estimate** unless the file carries DPI metadata. A scanned or professionally exported file usually has this; a phone photo often doesn't.
 - **Excel page size is only reliable when the print setup was explicitly configured** in the file. Otherwise the report gives a rough estimate from column/row dimensions, not a true print size - it's flagged specifically so you know to eyeball it.
+- **`/upload/init` is rate-limited**: 40 requests an hour per address (`UPLOAD_INITS_PER_IP_PER_HOUR`), at most 3,000 files in one go (`MAX_FILES_PER_UPLOAD`), and upload links last 3 hours rather than 24 (`UPLOAD_LINK_HOURS`). All three are environment variables if a real job ever needs more. The file sizes the browser declares are a courtesy check only - they're the client's word, not a guarantee, so the presigned link itself is what's kept short.
+- **Word page counts are estimates, never measurements** - see the section above. The page size is exact; the count is Word's own pagination when the file carries it, otherwise a floor. Ask for a PDF when the number has to be right.
 - **PowerPoint has one slide size per file** (not per-slide) - PowerPoint itself doesn't allow mixed slide sizes in one deck, so this isn't a limitation of the tool.
 - File-type detection is by extension. A file with a wrong or missing extension will be skipped and listed as unsupported.
 

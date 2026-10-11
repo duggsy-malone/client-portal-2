@@ -12,6 +12,12 @@ from dataclasses import dataclass
 # Tolerance for matching a measured size to a standard one, in mm.
 TOLERANCE_MM = 3.0
 
+# Artwork supplied for trimming arrives oversized, with bleed on every edge -
+# 3 mm is the usual allowance and 5 mm is common on larger work. A page is
+# bigger than its trimmed size by TWICE the bleed in each direction, so A4
+# with 3 mm bleed arrives as 216 x 303 mm. Those count as the trimmed size.
+BLEED_ALLOWANCES_MM = (3.0, 5.0)
+
 # Standard ISO 216 "A" series + common US/business sizes (width_mm, height_mm), portrait.
 STANDARD_PAGE_SIZES = {
     "A0": (841.0, 1189.0),
@@ -136,6 +142,7 @@ class SizeMatch:
     is_standard: bool
     width_mm: float
     height_mm: float
+    bleed_mm: float = None   # set when the size is a standard one plus bleed
 
 
 def _normalise(width_mm: float, height_mm: float):
@@ -184,9 +191,33 @@ def match_page_size(width_mm: float, height_mm: float, tolerance: float = TOLERA
 
     combined_table = {**STANDARD_PAGE_SIZES, **SQUARE_SIZES}
     m = match_size(width_mm, height_mm, combined_table, tolerance)
+    if not m.is_standard:
+        m = match_with_bleed(width_mm, height_mm, combined_table, tolerance)
     if m.is_standard and m.label in LABEL_ALIASES:
         m.label = LABEL_ALIASES[m.label]
     return m
+
+
+def match_with_bleed(width_mm, height_mm, table=None, tolerance: float = TOLERANCE_MM) -> SizeMatch:
+    """A page supplied for trimming is bigger than its finished size by twice
+    the bleed on each axis. Checks the usual allowances and, if one fits,
+    returns the TRIMMED size with the bleed recorded - so 216 x 303 counts as
+    an A4 that happens to carry 3 mm of bleed.
+
+    The smallest allowance is tried first, so a size that could be read either
+    way is reported as the tighter (and far more common) one.
+    """
+    table = {**STANDARD_PAGE_SIZES, **SQUARE_SIZES} if table is None else table
+    w, h = _normalise(width_mm, height_mm)
+    for bleed in sorted(BLEED_ALLOWANCES_MM):
+        grown = 2 * bleed
+        for label, (std_w, std_h) in table.items():
+            sw, sh = _normalise(std_w, std_h)
+            if abs(w - (sw + grown)) <= tolerance and abs(h - (sh + grown)) <= tolerance:
+                return SizeMatch(label=label, is_standard=True, width_mm=width_mm,
+                                 height_mm=height_mm, bleed_mm=bleed)
+    return SizeMatch(label="Non-standard", is_standard=False,
+                     width_mm=width_mm, height_mm=height_mm)
 
 
 def mm_from_points(points: float) -> float:

@@ -63,7 +63,13 @@ for _d in (UPLOAD_DIR, REPORTS_DIR, JOBS_DIR):
 
 MAX_CONTENT_LENGTH = 5 * 1024 * 1024 * 1024  # 5GB per submission
 RETENTION_DAYS = 30
-UPLOAD_LINK_HOURS = 24          # how long a client's upload links stay valid
+UPLOAD_LINK_HOURS = int(os.environ.get("UPLOAD_LINK_HOURS", "3"))
+# ^ how long a client's upload links stay valid. These are write links into
+# the bucket, so they're kept short - long enough for a slow connection to
+# finish a big job, not long enough to be worth passing around. Raise it with
+# the environment variable if a client ever needs longer.
+MAX_FILES_PER_UPLOAD = int(os.environ.get("MAX_FILES_PER_UPLOAD", "3000"))
+UPLOAD_INITS_PER_IP_PER_HOUR = int(os.environ.get("UPLOAD_INITS_PER_IP_PER_HOUR", "40"))
 ABANDONED_AFTER_HOURS = 24      # unfinished uploads are deleted after this
 STALLED_AFTER_MINUTES = 120     # a job with no progress this long gets restarted
 COUNT_STALLED_AFTER_MINUTES = 15  # page counts are picked up again sooner - someone's waiting
@@ -136,6 +142,39 @@ def _validate_contact(contact, count_only):
     return None
 
 
+# /upload/init hands out write links to the bucket, so it can't be left wide
+# open: without a limit, anyone could ask for thousands of them, declare a
+# size of 1 byte each and then upload whatever they liked. A real client
+# submits once or twice; the ceiling is set far above that.
+_upload_init_times = {}
+_upload_init_lock = threading.Lock()
+
+
+def _declared_size(entry):
+    """The size the browser claims for one file. Anything that isn't a sensible
+    number counts as zero rather than raising."""
+    try:
+        value = int(entry.get("size") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, value)
+
+
+def _upload_init_allowed():
+    """False when this address has asked for upload links too many times in
+    the last hour."""
+    now = time.time()
+    ip = request.remote_addr or "?"
+    with _upload_init_lock:
+        for k in [k for k, v in _upload_init_times.items() if now - max(v) > 3600]:
+            del _upload_init_times[k]
+        recent = [s for s in _upload_init_times.get(ip, []) if now - s < 3600]
+        if len(recent) >= UPLOAD_INITS_PER_IP_PER_HOUR:
+            return False
+        _upload_init_times[ip] = recent + [now]
+        return True
+
+
 def _validate_file_names(names):
     """Any file type is accepted, ZIPs included - they're opened one file at a
     time. Types the analyser can't count pages for still go to Kaye in the
@@ -188,7 +227,10 @@ def _check_token(submission_id, reference_number, token):
     if not (isinstance(reference_number, str)
             and re.fullmatch(r"[A-Za-z]{1,8}-\d{4,10}|\d{6}-\d{5,10}", reference_number)):
         return False
-    return hmac.compare_digest(_make_token(submission_id, reference_number), str(token or ""))
+    # Compare as bytes: compare_digest raises TypeError on non-ASCII text,
+    # and a junk token should be a plain "no", not a 500.
+    return hmac.compare_digest(_make_token(submission_id, reference_number).encode(),
+                               str(token or "").encode())
 
 
 def _files_prefix(submission_id):
@@ -357,8 +399,19 @@ def upload_init():
     error = _validate_contact(contact, count_only) or _validate_file_names([f.get("name") for f in files])
     if error:
         return jsonify({"error": error}), 400
+    if len(files) > MAX_FILES_PER_UPLOAD:
+        return jsonify({"error": f"That's {len(files):,} files in one go, which is more than we can take "
+                                 f"({MAX_FILES_PER_UPLOAD:,}). Please put them in a ZIP, or send them in "
+                                 f"a few batches."}), 400
+    if not _upload_init_allowed():
+        logger.warning(f"Upload links refused: {request.remote_addr} has asked too many times this hour.")
+        return jsonify({"error": "We've had a lot of upload requests from your connection in the last "
+                                 "hour. Please wait a few minutes and try again, or get in touch and "
+                                 "we'll take your files another way."}), 429
 
-    total_bytes = sum(int(f.get("size") or 0) for f in files)
+    # The sizes below are what the browser SAYS the files are, so they're a
+    # courtesy check to fail early - not a guarantee of what gets uploaded.
+    total_bytes = sum(_declared_size(f) for f in files)
     if total_bytes > MAX_CONTENT_LENGTH:
         limit_gb = MAX_CONTENT_LENGTH // (1024 ** 3)
         return jsonify({"error": f"Total size exceeds the {limit_gb}GB limit - please remove some files."}), 400
@@ -808,7 +861,7 @@ def _run_count_job(submission_id, status=None):
         _write_job(submission_id, state="done", stage="Done")
 
         totals = job_totals(rows, folder_info)
-        status.update(status="done", stage="", file_count=total, total_items=len(rows),
+        status.update(status="done", stage="", file_count=total, total_items=totals["pages"],
                       flagged=sum(1 for r in rows if r.flagged),
                       sizes=history.sizes_for_record(build_size_summary(rows)),
                       sheets=totals["sheets"], tabs=totals["tabs"], dividers=totals["dividers"],
@@ -917,7 +970,7 @@ def _run_quote_job(submission_id):
             status["tabs"] = totals["tabs"]
             status["dividers"] = totals["dividers"]
             status["file_count"] = len(saved_paths)
-            status["total_items"] = len(rows)
+            status["total_items"] = totals["pages"]
             status["flagged"] = sum(1 for r in rows if r.flagged)
             status["sizes"] = history.sizes_for_record(build_size_summary(rows))
             status["has_report"] = history.save_report(submission_id, client_copy)
@@ -1190,7 +1243,7 @@ def _ensure_background_started():
 
 def _admin_ok():
     supplied = request.values.get("key", "")
-    return bool(ADMIN_KEY) and hmac.compare_digest(supplied, ADMIN_KEY)
+    return bool(ADMIN_KEY) and hmac.compare_digest(supplied.encode(), ADMIN_KEY.encode())
 
 
 @app.route("/admin/storage-check")

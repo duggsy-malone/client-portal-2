@@ -338,7 +338,19 @@ function updateSubmitState() {
 // a ZIP or download that hadn't finished when it was added, which shows up
 // here as a tiny file.
 const PARTIAL_DOWNLOAD = /\.(crdownload|part|partial|download|tmp)$/i;
+const WORD_FILE = /\.(docx|docm|dotx)$/i;
+const OLD_WORD_FILE = /\.doc$/i;
 function fileWarning(f) {
+  if (OLD_WORD_FILE.test(f.name)) {
+    return "We can't open older .doc files. Re-save it as .docx, or send a PDF, "
+      + 'and we can measure it properly.';
+  }
+  if (WORD_FILE.test(f.name)) {
+    // A Word file has no fixed page count - it repaginates when it's opened -
+    // so say so here, while they can still swap it for a PDF.
+    return 'Word files have no fixed page count, so we can only estimate this one. '
+      + 'Send a PDF instead if the page count matters.';
+  }
   if (PARTIAL_DOWNLOAD.test(f.name)) {
     return "This looks like a download that hasn't finished yet. Let it finish, then remove this and add the finished file.";
   }
@@ -456,8 +468,9 @@ function renderBoard() {
   renderChips();
 
   if (needsLook) {
-    boardNote.textContent = `Needs a look: ${needsLook} file${needsLook === 1 ? '' : 's'} on the board ` +
-      `may not have finished downloading. Check ${needsLook === 1 ? 'it' : 'them'} before you send.`;
+    boardNote.textContent = `Needs a look: ${needsLook} file${needsLook === 1 ? '' : 's'} on the board `
+      + `${needsLook === 1 ? 'has' : 'have'} a note against ${needsLook === 1 ? 'it' : 'them'} - `
+      + 'worth a read before you send.';
     boardNote.style.display = '';
   } else {
     boardNote.style.display = 'none';

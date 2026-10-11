@@ -168,7 +168,7 @@ def check_link_params(secret, key, expires, token, now=None):
     if not (isinstance(key, str) and len(key) == 32 and all(ch in "0123456789abcdef" for ch in key)):
         return False, "invalid"
     expected = hmac.new(secret, f"history|{key}|{expires_int}".encode(), hashlib.sha256).hexdigest()[:40]
-    if not hmac.compare_digest(expected, str(token or "")):
+    if not hmac.compare_digest(expected.encode(), str(token or "").encode()):
         return False, "invalid"
     if expires_int < (now or time.time()):
         return False, "expired"

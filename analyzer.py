@@ -26,6 +26,8 @@ import os
 import zipfile
 import tempfile
 import shutil
+import xml.etree.ElementTree as ET
+from collections import OrderedDict
 from dataclasses import dataclass, field, asdict
 
 from paper_sizes import (
@@ -71,6 +73,7 @@ class Row:
     flagged: bool = False
     notes: str = ""
     source_bytes: int = None   # how big the file is on disk, for spotting copies
+    items: int = 1             # pages/sides this row stands for (see analyze_docx)
 
     def as_dict(self):
         d = asdict(self)
@@ -89,6 +92,23 @@ UNREADABLE = ("We can't open this file. It may be password-protected. Remove the
 
 def _unreadable(kind, error):
     return f"{UNREADABLE} ({kind}: {error})"
+
+
+def _bleed_note(m):
+    """A sentence naming the bleed, when a size only matched because it had
+    some. Blank otherwise, so it can always be appended."""
+    if not getattr(m, "bleed_mm", None):
+        return ""
+    return (f"Supplied with {m.bleed_mm:g} mm bleed "
+            f"({abs(m.width_mm):.0f} x {abs(m.height_mm):.0f} mm), so it is counted as "
+            f"{m.label} and will need trimming.")
+
+
+# Excel's paper-size names that don't match the keys in STANDARD_PAGE_SIZES.
+DECLARED_ALIASES = {
+    "Tabloid": "Tabloid/Ledger",
+    "Ledger": "Tabloid/Ledger",
+}
 
 
 def analyze_pdf(path, source_file, location=""):
@@ -120,7 +140,8 @@ def analyze_pdf(path, source_file, location=""):
                 width_mm=w_mm, height_mm=h_mm,
                 matched_size=m.label, is_standard=m.is_standard,
                 flagged=not m.is_standard,
-                notes="" if m.is_standard else "Non-standard page size for a PDF page."
+                notes=(_bleed_note(m) if m.is_standard
+                       else "Non-standard page size for a PDF page.")
             ))
     except Exception as e:
         rows.append(Row(source_file, location, "PDF", "Whole document",
@@ -154,6 +175,8 @@ def analyze_image(path, source_file, location=""):
                 notes.append(f"No DPI metadata found - assumed {ASSUMED_IMAGE_DPI} DPI to estimate print size.")
             if not m.is_standard:
                 notes.append("Estimated print size doesn't match a standard paper size.")
+            elif _bleed_note(m):
+                notes.append(_bleed_note(m))
             rows.append(Row(
                 source_file, location, "Image", f"{width_px}x{height_px}px",
                 width_mm=w_mm, height_mm=h_mm,
@@ -203,11 +226,14 @@ def analyze_pptx(path, source_file, location=""):
         h_mm = mm_from_emu(int(size.get("cy")))
         slide_count = sum(1 for el in root.iter() if _local(el.tag) == "sldId")
         m = match_size(w_mm, h_mm, STANDARD_SLIDE_SIZES)
+        # A deck is one row standing for all of its slides, the same way a
+        # Word document is one row standing for all of its pages - PowerPoint
+        # has a single slide size per file, so there's nothing to split.
         rows.append(Row(
             source_file, location, "PPTX", f"{slide_count} slide(s) @ deck size",
             width_mm=w_mm, height_mm=h_mm,
             matched_size=m.label, is_standard=m.is_standard,
-            flagged=not m.is_standard,
+            flagged=not m.is_standard, items=max(1, slide_count),
             notes="" if m.is_standard else "Non-standard slide size for the whole deck."
         ))
     except Exception as e:
@@ -349,13 +375,21 @@ def analyze_xlsx(path, source_file, location=""):
                         # "US Letter" is one key, not "US" - look the whole
                         # label up first, then the first word (e.g. "A2 (rotated)").
                         std_w, std_h = (STANDARD_PAGE_SIZES.get(declared)
+                                        or STANDARD_PAGE_SIZES.get(DECLARED_ALIASES.get(declared, ""))
                                         or STANDARD_PAGE_SIZES.get(declared.split(" ")[0], (None, None)))
+                        # A sheet that declares a paper size we hold no
+                        # dimensions for must still be flagged - otherwise it
+                        # is silently left out of every size and sheet total.
+                        known = std_w is not None and std_h is not None
                         rows.append(Row(
                             source_file, location, "Excel", f"Sheet '{title}' (declared print setup)",
                             width_mm=std_w, height_mm=std_h,
-                            matched_size=LABEL_ALIASES.get(declared, declared), is_standard=True,
-                            flagged=False,
-                            notes=f"Orientation: {ws['orientation'] or 'not set'}."
+                            matched_size=LABEL_ALIASES.get(declared, declared), is_standard=known,
+                            flagged=not known,
+                            notes=(f"Orientation: {ws['orientation'] or 'not set'}." if known else
+                                   f"This sheet is set to print at {declared}, which we hold no "
+                                   f"measurements for, so it isn't in the size totals - please check it "
+                                   f"manually. Orientation: {ws['orientation'] or 'not set'}.")
                         ))
                     else:
                         rows.append(Row(
@@ -397,11 +431,166 @@ def analyze_xlsx(path, source_file, location=""):
                     matched_size=m.label, is_standard=m.is_standard,
                     flagged=True,  # always flag estimated (non-declared) sheets for a manual glance
                     notes=("No print area/paper size set in the file - size is an ESTIMATE from column/row "
-                           "dimensions, not a true print size. Please sanity-check before quoting.")
+                           "dimensions, not a true print size. Please sanity-check before quoting."
+                           + ((" " + _bleed_note(m)) if _bleed_note(m) else ""))
                 ))
     except Exception as e:
         rows.append(Row(source_file, location, "Excel", "Whole file",
                          flagged=True, notes=_unreadable("Spreadsheet", e)))
+    return rows
+
+
+# --------------------------------------------------------------------------
+# Word documents
+# --------------------------------------------------------------------------
+# A .docx has no page count in it. It holds content, and the pages only exist
+# once something lays it out - so the answer depends on the fonts installed,
+# the paper size and even the Word version. What IS stored reliably is the
+# page SIZE, which is what matters most for quoting, plus enough clues to put
+# a floor under the page count:
+#
+#   w:lastRenderedPageBreak  where Word put the breaks the last time it
+#                            repaginated. The best signal when it's there.
+#   w:br w:type="page"       breaks the author typed in. A floor, not a count.
+#   w:sectPr                 section breaks, which usually start a new page.
+#   docProps/app.xml <Pages> a cached count from whatever last saved the file.
+#                            Often absent, often stale - used only as a
+#                            cross-check, never on its own.
+#
+# Whatever comes out is flagged, and the note says where the figure came from,
+# so nobody quotes off it as though it were exact.
+
+WORD_TWIPS_PER_MM = 1440.0 / 25.4   # 1440 twentieths of a point to the inch
+
+
+def _twips_to_mm(value):
+    return float(value) / WORD_TWIPS_PER_MM
+
+
+def _docx_cached_pages(zf):
+    """The page count cached by whatever last saved the file, or None."""
+    try:
+        with zf.open("docProps/app.xml") as handle:
+            for _event, el in ET.iterparse(handle, events=("end",)):
+                if _local(el.tag) == "Pages":
+                    text = (el.text or "").strip()
+                    return int(text) if text.isdigit() else None
+                el.clear()
+    except Exception:
+        return None
+    return None
+
+
+def _docx_scan_body(zf):
+    """One streamed pass over the document: page sizes, and the three kinds of
+    break that hint at where the pages fall."""
+    sizes = []            # (width_mm, height_mm) per section, in order
+    rendered = 0          # w:lastRenderedPageBreak
+    typed = 0             # w:br w:type="page"
+    section_starts = 0    # sections that begin on a new page
+    with zf.open("word/document.xml") as handle:
+        for _event, el in ET.iterparse(handle, events=("end",)):
+            tag = _local(el.tag)
+            if tag == "lastRenderedPageBreak":
+                rendered += 1
+            elif tag == "br":
+                for key, value in el.attrib.items():
+                    if _local(key) == "type" and value == "page":
+                        typed += 1
+            elif tag == "pgSz":
+                w = h = None
+                for key, value in el.attrib.items():
+                    name = _local(key)
+                    if name == "w":
+                        w = value
+                    elif name == "h":
+                        h = value
+                if w and h:
+                    try:
+                        sizes.append((_twips_to_mm(w), _twips_to_mm(h)))
+                    except ValueError:
+                        pass
+            elif tag == "sectPr":
+                # A "continuous" section carries on down the same page; any
+                # other kind starts a new one.
+                kind = "nextPage"
+                for child in el:
+                    if _local(child.tag) == "type":
+                        for key, value in child.attrib.items():
+                            if _local(key) == "val":
+                                kind = value
+                if kind != "continuous":
+                    section_starts += 1
+                el.clear()
+            elif tag in ("p", "tbl"):
+                el.clear()   # keep memory flat on a long document
+    return sizes, rendered, typed, section_starts
+
+
+def analyze_docx(path, source_file, location=""):
+    rows = []
+    try:
+        with zipfile.ZipFile(path) as zf:
+            sizes, rendered, typed, section_starts = _docx_scan_body(zf)
+            cached = _docx_cached_pages(zf)
+    except Exception as e:
+        return [Row(source_file, location, "DOCX", "Whole file", flagged=True,
+                    notes=_unreadable("Word", e))]
+
+    if not sizes:
+        return [Row(source_file, location, "DOCX", "Whole file", flagged=True,
+                    notes=("We opened this Word file but couldn't find a page size in it - please "
+                           "check it manually, or send it as a PDF."))]
+
+    # The last sectPr in the body applies to the final section, so the number
+    # of section starts is one more than the number of breaks between them.
+    floor = max(1, typed + max(0, section_starts - 1) + 1)
+    if rendered:
+        pages, source = rendered + 1, "as Word last laid it out"
+    else:
+        pages, source = floor, "a minimum - counted from the page and section breaks"
+    if cached and cached > pages:
+        pages, source = cached, "the count saved in the file by Word"
+
+    # Group the sections by page size, biggest group first, so a document that
+    # switches to landscape for its drawings shows both.
+    grouped = OrderedDict()
+    bleed_seen = ""
+    for w, h in sizes:
+        m = match_page_size(w, h)
+        bleed_seen = bleed_seen or _bleed_note(m)
+        key = (round(w, 1), round(h, 1), m.label, m.is_standard)
+        grouped[key] = grouped.get(key, 0) + 1
+    ordered = sorted(grouped.items(), key=lambda kv: -kv[1])
+
+    note = (f"Word documents repaginate when they're opened, so this page count is {source}, "
+            f"not a measurement. For an exact count, ask for it as a PDF.")
+    if cached is not None and cached != pages:
+        note += f" (The file's own saved count says {cached:,}.)"
+    if len(ordered) > 1:
+        note += " This document changes page size part-way through - the sizes are listed separately."
+    if bleed_seen:
+        note += " " + bleed_seen
+
+    # All the pages are attributed to the dominant section's size, and any
+    # other sizes are listed with no page count of their own, so nothing is
+    # counted twice.
+    for index, ((w, h, label, is_standard), sections) in enumerate(ordered):
+        if index == 0:
+            rows.append(Row(
+                source_file, location, "DOCX",
+                f"At least {pages} page(s) @ document size" if source.startswith("a minimum")
+                else f"{pages} page(s) @ document size",
+                width_mm=w, height_mm=h, matched_size=label, is_standard=is_standard,
+                flagged=True, items=pages, notes=note))
+        else:
+            rows.append(Row(
+                source_file, location, "DOCX",
+                f"Also {sections} section(s) @ this size",
+                width_mm=w, height_mm=h, matched_size=label, is_standard=is_standard,
+                flagged=True, items=0,
+                notes="Another page size used inside the same Word document - its pages are "
+                      "included in the figure above."))
     return rows
 
 
@@ -413,6 +602,9 @@ DISPATCH = {
     ".pptx": analyze_pptx,
     ".xlsx": analyze_xlsx,
     ".xlsm": analyze_xlsx,
+    ".docx": analyze_docx,
+    ".docm": analyze_docx,
+    ".dotx": analyze_docx,
 }
 
 
@@ -544,6 +736,10 @@ def _analyze_file_inner(path, original_filename, ext, size, on_item=None):
         return analyze_zip(path, original_filename, on_item=on_item)
     elif ext in DISPATCH:
         return DISPATCH[ext](path, original_filename)
+    elif ext == ".doc":
+        return [Row(original_filename, "", "DOC", "Whole file", flagged=True,
+                    notes=("This is an older Word file (.doc), which we can't open here. Re-save it "
+                           "as .docx or send it as a PDF and we can measure it."))]
     else:
         return [Row(original_filename, "", ext.lstrip(".").upper() or "Unknown", "Whole file",
                      flagged=True,

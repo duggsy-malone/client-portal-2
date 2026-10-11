@@ -92,8 +92,14 @@ def build_documents(rows, folder_info=None):
             docs[key] = doc
         doc.rows.append(r)
         if r.width_mm is not None and r.height_mm is not None:
-            doc.pages += 1
+            doc.pages += _items(r)
     return list(docs.values())
+
+
+def _items(row):
+    """How many pages a row stands for - one for a PDF page, the whole
+    document for a Word file (see analyze_docx in analyzer.py)."""
+    return getattr(row, "items", 1)
 
 
 def count_tabs(documents):
@@ -217,13 +223,47 @@ def _name_similarity(a, b):
     return difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
 
+def _names_alike(a, b, threshold=None):
+    """Is this pair similar enough to be the same document twice?
+
+    The full ratio() is expensive and this runs for every pair of documents in
+    a job, so the two bounds difflib provides for exactly this purpose are
+    checked first: real_quick_ratio() is a length comparison and quick_ratio()
+    a character count, and both are upper bounds on the real answer - if
+    either falls short, ratio() cannot reach the threshold. The result is
+    identical, it just stops comparing drawing names letter by letter when
+    their lengths already rule it out.
+    """
+    threshold = DUPLICATE_NAME_SIMILARITY if threshold is None else threshold
+    matcher = difflib.SequenceMatcher(None, a.lower(), b.lower())
+    return (matcher.real_quick_ratio() >= threshold
+            and matcher.quick_ratio() >= threshold
+            and matcher.ratio() >= threshold)
+
+
+# Comparing names is quadratic: every document against every cluster already
+# found. That is fine for a normal job and fine for a big one where the names
+# repeat, but a job with thousands of documents that are all differently named
+# would otherwise grind for minutes with nothing to show for it. The budget
+# below stops that; when it runs out, the remaining documents are simply left
+# unclustered, which means "not reported as duplicates" rather than a wrong
+# answer. Measured: ~2,400 differently-named documents is about 35 seconds,
+# which is where this bites.
+MAX_NAME_COMPARISONS = 400_000
+
+
 def _cluster_by_name(docs):
     """Splits documents that look alike by size into groups that also look
     alike by name."""
     clusters = []
+    budget = MAX_NAME_COMPARISONS
     for d in docs:
+        if budget <= 0:
+            clusters.append([d])
+            continue
         for cluster in clusters:
-            if any(_name_similarity(d.name, other.name) >= DUPLICATE_NAME_SIMILARITY for other in cluster):
+            budget -= len(cluster)
+            if any(_names_alike(d.name, other.name) for other in cluster):
                 cluster.append(d)
                 break
         else:

@@ -69,9 +69,10 @@
       <td style="white-space:nowrap" class="fp-mono">{{ r.created }}</td>
       <td style="white-space:nowrap" class="fp-mono"><b>{{ r.reference_number }}</b></td>
       <td>{{ 'Page count' if r.kind == 'count' else 'Quote' }}</td>
-      <td>{{ r.get('contact', {}).get('full_name', '') }}{% if r.contact.company %}<br><span class="fp-small fp-muted">{{ r.contact.company }}</span>{% endif %}
-          <br><span class="fp-small fp-muted">{{ r.contact.email }}{% if r.contact.phone %} &middot; {{ r.contact.phone }}{% endif %}</span></td>
-      <td>{{ r.contact.subject }}{% if r.contact.deadline %}<br><span class="fp-small fp-muted">Deadline {{ r.contact.deadline }}</span>{% endif %}
+      {% set c = r.get('contact') or {} %}
+      <td>{{ c.get('full_name', '') }}{% if c.get('company') %}<br><span class="fp-small fp-muted">{{ c.get('company') }}</span>{% endif %}
+          <br><span class="fp-small fp-muted">{{ c.get('email', '') }}{% if c.get('phone') %} &middot; {{ c.get('phone') }}{% endif %}</span></td>
+      <td>{{ c.get('subject', '') }}{% if c.get('deadline') %}<br><span class="fp-small fp-muted">Deadline {{ c.get('deadline') }}</span>{% endif %}
           {% if r.get('plans_to_scale') is true %}<br><span class="fp-plans scale">To scale</span>{% elif r.get('plans_to_scale') is false %}<br><span class="fp-plans a3">A3 folded</span>{% endif %}</td>
       {% set files = r.get('file_count') %}{% set items = r.get('total_items') %}
       {% set sheets = r.get('sheets') %}{% set binders = r.get('folders_needed') %}

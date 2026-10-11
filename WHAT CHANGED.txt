@@ -1,0 +1,104 @@
+FLIGHTPATH - WORD, SLIDES, BLEED AND UPLOAD LIMITS (web portal)
+===============================================================
+
+Changed files only, folder structure intact. Unzip over your existing copy
+and deploy. No new Python packages.
+
+This bundle REPLACES the earlier "flightpath_word_support.zip" and
+"flightpath_counting_fixes.zip" - everything from both is in here.
+
+
+1. SLIDES: ONE SLIDE, ONE PAGE, ONE SHEET
+-----------------------------------------
+A 30-slide deck used to add 1 page to the totals. It now adds 30 pages and
+30 sheets - scaled to A4, one slide to a sheet, never two-up. The "As per
+the Standard" table gives slides their own row:
+
+  PowerPoint slides, scaled to A4      30      30    one slide to a sheet
+
+
+2. PAGES THAT ARRIVE WITH BLEED
+-------------------------------
+Artwork supplied for trimming is bigger than its finished size by twice the
+bleed on each edge, so A4 with 3 mm bleed arrives as 216 x 303 mm. Those now
+count as the trimmed size:
+
+  216 x 303  ->  A4   (3 mm bleed)
+  220 x 307  ->  A4   (5 mm bleed)
+  303 x 426  ->  A3   (3 mm bleed)
+  307 x 430  ->  A3   (5 mm bleed)
+
+Both allowances are checked on every standard size, in either orientation,
+and the smaller is tried first. The page is NOT flagged - it's a normal way
+to be supplied - but it carries a note: "Supplied with 3 mm bleed
+(216 x 303 mm), so it is counted as A4 and will need trimming."
+
+Anything oversized by some other amount is still non-standard and still
+flagged. The allowances live in BLEED_ALLOWANCES_MM in paper_sizes.py if you
+ever want to add one.
+
+
+3. US LEGAL
+-----------
+Confirmed as A4, in the totals as well as the label. The only change is that
+the report now SAYS so - the sheets note used to mention US Letter only, so
+a Legal page was being converted silently.
+
+
+4. UPLOAD LINKS: RATE LIMITED AND SHORTER LIVED
+-----------------------------------------------
+/upload/init hands out write links to your R2 bucket, and had no limit on it
+at all. Now:
+
+  * 40 requests an hour per address, then a polite refusal telling the client
+    to wait or get in touch   (UPLOAD_INITS_PER_IP_PER_HOUR)
+  * at most 3,000 files in one request, with advice to ZIP them
+    (MAX_FILES_PER_UPLOAD)
+  * links last 3 hours instead of 24   (UPLOAD_LINK_HOURS)
+
+All three are environment variables, so if a real client ever hits one you
+can raise it in Render without a deploy. A normal job submits once or twice,
+so these ceilings are far above real use.
+
+Also: a junk file size from the browser used to 500 the request; it doesn't
+now.
+
+
+5. WORD DOCUMENTS (from the earlier bundle)
+-------------------------------------------
+Real page size and orientation read from the .docx; page count from Word's
+own pagination markers where they exist, otherwise a floor from the page and
+section breaks. Always flagged, with a note saying where the figure came
+from. Old binary .doc files get a note asking for .docx or PDF. A Word file
+on the departures board gets a "Needs a look" pill so it can be swapped for
+a PDF before sending.
+
+
+6. THE COUNTING BUGS THIS ALL EXPOSED (from the earlier bundle)
+---------------------------------------------------------------
+  * The page figure saved with each job was the row count - so a 200-page
+    Word file would have emailed the client "(1 pages)".
+  * The "As per the Standard" table counted rows, not pages, and disagreed
+    with the headline above it. The buckets are now defined once and shared
+    between the report and the CSV.
+  * A spreadsheet set to print Tabloid/Ledger was silently dropped from every
+    total with no flag. Fixed, and any declared size we hold no measurements
+    for is now flagged rather than ignored.
+  * Duplicate detection was quadratic: 1,200 differently-named documents took
+    37 seconds, twice per report. Now about 5, and capped.
+  * One job record missing its contact details would 500 the whole admin list.
+  * A non-ASCII character in a key or token caused a 500 instead of a no.
+
+
+EXPECT YOUR TOTALS TO CHANGE
+----------------------------
+Upwards, on any job containing a deck, a Word file, a Tabloid spreadsheet or
+pages supplied with bleed. All four were under-counting.
+
+
+STILL OPEN
+----------
+A job that takes longer than 15 minutes to build its report can be restarted
+by housekeeping while it's still running, and the retry path deletes the
+client's uploaded files. The duplicate speed-up makes this much less likely
+but doesn't close it. Worth doing properly next.
