@@ -1,3 +1,7 @@
+/* Flightpath - the iPrintManage client upload portal.
+   Copyright (c) 2026 Sandyboy Design and Print Ltd. All rights reserved.
+   Licensed to iPrintManage for its own business use - see LICENSE. */
+
 /* ==========================================================================
    Flightpath skin - Flight Path brand guide v1.0, September 2026.
 
@@ -338,3 +342,34 @@ progress.fp-progress:indeterminate::-moz-progress-bar { background: transparent;
   .fp-board tbody td:nth-child(4) { float: right; text-align: right !important; }
   .fp-board__warn { max-width: none; }
 }
+
+/* --- the project-website offer ----------------------------------------- */
+/* Shown over the page after "send" and before the first byte goes out, so it
+   has to sit above everything, and scroll on a small screen rather than
+   pushing its own buttons off the bottom. */
+.fp-modal {
+  position: fixed; inset: 0; z-index: 60; display: flex;
+  align-items: center; justify-content: center; padding: 20px;
+  background: rgba(28, 0, 114, .55); overflow-y: auto;
+}
+.fp-modal[hidden] { display: none; }
+.fp-modal__sheet {
+  width: 100%; max-width: 540px; margin: auto; padding: 24px;
+  background: var(--fp-card); border: 1px solid var(--fp-line);
+  border-top: 5px solid var(--fp-orange); border-radius: 16px;
+  box-shadow: 0 18px 50px rgba(28, 0, 114, .32);
+}
+.fp-modal__title {
+  margin: 7px 0 12px; font-size: 25px; line-height: 1.15; color: var(--fp-navy);
+}
+.fp-modal__sheet p { margin: 0 0 13px; }
+.fp-modal__actions { margin-top: 18px; }
+@media (max-width: 520px) {
+  .fp-modal { padding: 12px; }
+  .fp-modal__sheet { padding: 18px; }
+  .fp-modal__title { font-size: 22px; }
+  .fp-modal__actions .fp-btn { width: 100%; }
+}
+
+/* The Copy to hint sits under its input, inside the label. */
+.fp-field .fp-small { display: block; margin-top: 5px; font-weight: 400; }

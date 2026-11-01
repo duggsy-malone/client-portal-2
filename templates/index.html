@@ -66,10 +66,15 @@
       <label class="fp-field">Phone number<span class="fp-req">*</span>
         <input type="tel" id="phone">
       </label>
-      <label class="fp-field" id="deadlineField">Deadline<span class="fp-req">*</span>
+      <label class="fp-field fp-full" id="ccField">{{ brand.label_cc }}
+        <input type="text" id="ccEmail" placeholder="colleague@company.co.uk, architect@practice.com">
+        <span class="fp-small fp-muted">{{ brand.hint_cc }} They'll be copied in on the emails
+          about this job.</span>
+      </label>
+      <label class="fp-field" id="deadlineField">{{ brand.label_deadline }}<span class="fp-req">*</span>
         <input type="date" id="deadline">
       </label>
-      <label class="fp-field fp-full" id="addressField">Delivery address<span class="fp-req">*</span>
+      <label class="fp-field fp-full" id="addressField">{{ brand.label_address }}<span class="fp-req">*</span>
         <textarea id="deliveryAddress"></textarea>
       </label>
       <label class="fp-field fp-full">Anything we should know about this job?
@@ -81,7 +86,7 @@
   <label class="fp-tick fp-tick--info" style="margin-top:16px">
     <input type="checkbox" id="countOnly">
     <span>I just want to count my pages &ndash; don't send this off for a quote, just show me a report.
-      (Deadline and delivery address won't be needed.)</span>
+      ({{ brand.label_deadline }} and {{ brand.label_address|lower }} won't be needed.)</span>
   </label>
 
   <label class="fp-scale" id="plansBox" style="margin-top:16px">
@@ -95,7 +100,7 @@
 
   <section class="fp-board" id="board" style="margin-top:20px">
     <div class="fp-board__head">
-      <span class="fp-label fp-label--onnavy">{{ brand.board_title }}</span>
+      <span class="fp-label fp-label--onnavy" id="boardTitle">{{ brand.board_title }}</span>
       <span class="fp-board__clock" id="boardClock"></span>
     </div>
     <div class="fp-board__empty" id="boardEmpty">{{ brand.empty_board }}</div>
@@ -112,7 +117,7 @@
 
   <label class="fp-tick" id="confirmFilesWrap" style="display:none;margin-top:14px">
     <input type="checkbox" id="confirmFiles">
-    <span><b>I've checked the departures board and I can see all of my files.</b><br>
+    <span><b>{{ brand.confirm_manifest }}</b><br>
       <span class="fp-small">Only the files listed above will be sent.</span></span>
   </label>
 
@@ -137,6 +142,24 @@
   {% include '_footer.html' %}
 </div>
 
+<div class="fp-modal" id="projectSiteModal" hidden>
+  <div class="fp-modal__sheet" role="dialog" aria-modal="true" aria-labelledby="projectSiteTitle">
+    <span class="fp-label">{{ brand.traffic_control }}</span>
+    <h2 class="fp-modal__title" id="projectSiteTitle">{{ brand.project_site_title }}</h2>
+    <p>{{ brand.project_site_body }}</p>
+    <p class="fp-small fp-muted">{{ brand.project_site_example }}</p>
+    <label class="fp-tick fp-tick--info" id="projectSiteTickWrap">
+      <input type="checkbox" id="projectSiteTick">
+      <span>{{ brand.project_site_tick }}</span>
+    </label>
+    <p class="fp-small fp-muted" style="margin-top:12px">{{ brand.project_site_small }}</p>
+    <div class="fp-btn-row fp-modal__actions">
+      <button type="button" class="fp-btn" id="projectSiteContinue">{{ brand.project_site_continue }}</button>
+      <button type="button" class="fp-btn fp-btn--ghost" id="projectSiteSkip">{{ brand.project_site_skip }}</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const dropzone = document.getElementById('dropzone');
 const fileInput = document.getElementById('fileInput');
@@ -152,7 +175,8 @@ const plansBoxEl = document.getElementById('plansBox');
 const plansToScaleEl = document.getElementById('plansToScale');
 const filesAddedEl = document.getElementById('filesAdded');
 
-// The departures board.
+// The departures board - the manifest, once files are on it.
+const boardTitleEl = document.getElementById('boardTitle');
 const boardBody = document.getElementById('boardBody');
 const boardTable = document.getElementById('boardTable');
 const boardEmpty = document.getElementById('boardEmpty');
@@ -164,6 +188,15 @@ const clearBoardBtn = document.getElementById('clearBoard');
 
 const PRIMARY_ACTION = {{ brand.primary_action | tojson }};
 const PROCESSING = {{ brand.processing | tojson }};
+const BOARD_TITLE = {{ brand.board_title | tojson }};
+const MANIFEST_TITLE = {{ brand.manifest_title | tojson }};
+const LABEL_CC = {{ brand.label_cc | tojson }};
+const LABEL_DEADLINE = {{ brand.label_deadline | tojson }};
+const LABEL_ADDRESS = {{ brand.label_address | tojson }};
+const MAX_CC_ADDRESSES = 3;
+const CONFIRMATION = {{ brand.confirmation | tojson }};
+const SENT_SHORT = {{ brand.sent_short | tojson }};
+const NOT_SENT = {{ brand.not_sent | tojson }};
 
 plansToScaleEl.addEventListener('change', () => plansBoxEl.classList.toggle('is-ticked', plansToScaleEl.checked));
 
@@ -181,6 +214,7 @@ const fieldInputs = {
   phone: document.getElementById('phone'),
   deadline: deadlineInput,
   deliveryAddress: deliveryAddressInput,
+  ccEmail: document.getElementById('ccEmail'),
 };
 
 let files = [];
@@ -323,13 +357,14 @@ confirmFilesEl.addEventListener('change', updateSubmitState);
 function updateSubmitState() {
   const total = files.reduce((s, f) => s + f.size, 0);
   const tooBig = total > MAX_TOTAL_BYTES;
+  boardTitleEl.textContent = files.length ? MANIFEST_TITLE : BOARD_TITLE;
   confirmFilesWrap.style.display = files.length ? '' : 'none';
   confirmFilesWrap.classList.toggle('is-ticked', confirmFilesEl.checked);
   popupNoteEl.style.display = (files.length && confirmFilesEl.checked && countOnlyEl.checked) ? '' : 'none';
   if (busy) { submitBtn.disabled = true; submitHintEl.style.display = 'none'; return; }
   submitBtn.disabled = files.length === 0 || tooBig || !confirmFilesEl.checked;
   const hint = files.length && !tooBig && !confirmFilesEl.checked
-    ? 'Tick the box above to confirm every file is on the board.' : '';
+    ? 'Tick the box above to confirm every file is on the manifest.' : '';
   submitHintEl.textContent = hint;
   submitHintEl.style.display = hint ? '' : 'none';
 }
@@ -482,7 +517,7 @@ function renderBoard() {
       `✓ ${files.length} file${files.length === 1 ? '' : 's'} checked in (${formatBytes(total)}) - `));
     const jump = document.createElement('a');
     jump.href = '#board';
-    jump.textContent = 'on the departures board below';
+    jump.textContent = 'on the manifest below';
     filesAddedEl.appendChild(jump);
     filesAddedEl.style.display = '';
   } else {
@@ -508,8 +543,8 @@ function missingFields() {
     ['Phone number', fieldInputs.phone],
   ];
   if (!isCountOnly) {
-    required.push(['Deadline', fieldInputs.deadline]);
-    required.push(['Delivery address', fieldInputs.deliveryAddress]);
+    required.push([LABEL_DEADLINE, fieldInputs.deadline]);
+    required.push([LABEL_ADDRESS, fieldInputs.deliveryAddress]);
   }
   return required.filter(([, el]) => !el.value.trim()).map(([label]) => label);
 }
@@ -536,7 +571,58 @@ function buildContactPayload() {
     phone: fieldInputs.phone.value.trim(),
     deadline: fieldInputs.deadline.value.trim(),
     delivery_address: fieldInputs.deliveryAddress.value.trim(),
+    cc_email: fieldInputs.ccEmail.value.trim(),
   };
+}
+
+// The same check the server makes, so a typo is caught before a 5GB upload
+// rather than after it. Returns a sentence, or '' if the field is fine.
+const CC_EMAIL_RE = /^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]{2,}$/;
+function ccProblem() {
+  const typed = fieldInputs.ccEmail.value.split(/[,;]/).map(a => a.trim()).filter(Boolean);
+  if (typed.length > MAX_CC_ADDRESSES) {
+    return `Please give at most ${MAX_CC_ADDRESSES} \u2018${LABEL_CC}\u2019 addresses `
+      + `- you've given ${typed.length}.`;
+  }
+  const bad = typed.find(a => !CC_EMAIL_RE.test(a));
+  return bad ? `That \u2018${LABEL_CC}\u2019 address doesn't look right: ${bad}. `
+    + 'Please check it, or clear the field.' : '';
+}
+
+// --- The project-website offer -------------------------------------------
+// Asked once, after they've confirmed the manifest and pressed send, and
+// before a single byte is uploaded. Either button carries on with the
+// upload; the only difference is whether we pass the interest on.
+const projectSiteModal = document.getElementById('projectSiteModal');
+const projectSiteTick = document.getElementById('projectSiteTick');
+const projectSiteTickWrap = document.getElementById('projectSiteTickWrap');
+let projectSiteWanted = false;
+let projectSiteAsked = false;
+
+projectSiteTick.addEventListener('change',
+  () => projectSiteTickWrap.classList.toggle('is-ticked', projectSiteTick.checked));
+
+function askProjectSite() {
+  if (projectSiteAsked) return Promise.resolve(projectSiteWanted);
+  return new Promise(resolve => {
+    const close = (wanted) => {
+      projectSiteAsked = true;
+      projectSiteWanted = wanted;
+      projectSiteModal.hidden = true;
+      document.removeEventListener('keydown', onKey);
+      resolve(wanted);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') close(false); };
+    document.getElementById('projectSiteContinue').onclick = () => close(projectSiteTick.checked);
+    document.getElementById('projectSiteSkip').onclick = () => {
+      projectSiteTick.checked = false;
+      projectSiteTickWrap.classList.remove('is-ticked');
+      close(false);
+    };
+    document.addEventListener('keydown', onKey);
+    projectSiteModal.hidden = false;
+    projectSiteTick.focus();
+  });
 }
 
 // --- Status and progress -------------------------------------------------
@@ -607,6 +693,10 @@ function showSuccess(parsed, isCountOnly) {
   files = [];
   renderBoard();
   confirmFilesEl.checked = false;
+  projectSiteAsked = false;
+  projectSiteWanted = false;
+  projectSiteTick.checked = false;
+  projectSiteTickWrap.classList.remove('is-ticked');
   document.getElementById('clientNote').value = '';
   updateSubmitState();
   setStatus('', 'done');
@@ -629,14 +719,12 @@ function showSuccess(parsed, isCountOnly) {
         }
       });
       statusEl.appendChild(btn);
-      if (parsed.history) addHistoryLine(statusEl, "Nothing was sent to the studio. This count is also saved in");
+      if (parsed.history) addHistoryLine(statusEl, `${NOT_SENT} This count is also saved in`);
     } else {
       addParagraph(statusEl, 'Page count complete, but the report could not be displayed. Please try again.');
     }
   } else {
-    addParagraph(statusEl, ref
-      ? `Sent to the studio. Your reference is ${ref}.`
-      : 'Sent to the studio.');
+    addParagraph(statusEl, ref ? CONFIRMATION.replace('{reference}', ref) : SENT_SHORT);
     addParagraph(statusEl, "We'll be in touch with a quote shortly.");
     if (parsed.history) addHistoryLine(statusEl, "We've emailed you a confirmation. You can see everything you've sent us in");
   }
@@ -726,6 +814,7 @@ function submitLegacy(isCountOnly) {
   formData.append('count_only', isCountOnly ? '1' : '0');
   formData.append('folders', JSON.stringify(files.map(f => f._folder || '')));
   formData.append('plans_to_scale', !isCountOnly && plansToScaleEl.checked ? '1' : '0');
+  formData.append('project_site', projectSiteWanted ? '1' : '0');
 
   const xhr = new XMLHttpRequest();
   xhr.open('POST', '/upload', true);
@@ -845,6 +934,7 @@ async function submitViaRelay(initResp, isCountOnly) {
     contact: buildContactPayload(),
     folders: files.map(f => f._folder || ''),
     plans_to_scale: !isCountOnly && plansToScaleEl.checked,
+    project_site: projectSiteWanted,
   }, 90 * 1000);
 
   if (isCountOnly) {
@@ -865,9 +955,17 @@ submitBtn.addEventListener('click', async () => {
     return;
   }
   if (!confirmFilesEl.checked) {
-    setStatus("Please tick the box to confirm you've checked the departures board.", 'error');
+    setStatus("Please tick the box to confirm you've checked the manifest.", 'error');
     return;
   }
+  const ccError = ccProblem();
+  if (ccError) {
+    setStatus(ccError, 'error');
+    fieldInputs.ccEmail.focus();
+    return;
+  }
+
+  await askProjectSite();
 
   const isCountOnly = countOnlyEl.checked;
   busy = true;

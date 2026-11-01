@@ -21,6 +21,7 @@
   }
   .fp-plans.scale { background: var(--fp-navy); color: #fff; }
   .fp-plans.a3 { background: var(--fp-beacon); color: var(--fp-navy); }
+  .fp-plans.site { background: var(--fp-orange); color: var(--fp-navy); }
 </style>
 </head>
 <body class="fp-onpaper">
@@ -71,9 +72,11 @@
       <td>{{ 'Page count' if r.kind == 'count' else 'Quote' }}</td>
       {% set c = r.get('contact') or {} %}
       <td>{{ c.get('full_name', '') }}{% if c.get('company') %}<br><span class="fp-small fp-muted">{{ c.get('company') }}</span>{% endif %}
-          <br><span class="fp-small fp-muted">{{ c.get('email', '') }}{% if c.get('phone') %} &middot; {{ c.get('phone') }}{% endif %}</span></td>
-      <td>{{ c.get('subject', '') }}{% if c.get('deadline') %}<br><span class="fp-small fp-muted">Deadline {{ c.get('deadline') }}</span>{% endif %}
-          {% if r.get('plans_to_scale') is true %}<br><span class="fp-plans scale">To scale</span>{% elif r.get('plans_to_scale') is false %}<br><span class="fp-plans a3">A3 folded</span>{% endif %}</td>
+          <br><span class="fp-small fp-muted">{{ c.get('email', '') }}{% if c.get('phone') %} &middot; {{ c.get('phone') }}{% endif %}</span>
+          {% if c.get('cc_email') %}<br><span class="fp-small fp-muted">{{ brand.label_cc }}: {{ c.get('cc_email') }}</span>{% endif %}</td>
+      <td>{{ c.get('subject', '') }}{% if c.get('deadline') %}<br><span class="fp-small fp-muted">{{ brand.label_deadline }} {{ c.get('deadline') }}</span>{% endif %}
+          {% if r.get('plans_to_scale') is true %}<br><span class="fp-plans scale">To scale</span>{% elif r.get('plans_to_scale') is false %}<br><span class="fp-plans a3">A3 folded</span>{% endif %}
+          {% if r.get('project_site') %}<br><span class="fp-plans site">Project site asked</span>{% endif %}</td>
       {% set files = r.get('file_count') %}{% set items = r.get('total_items') %}
       {% set sheets = r.get('sheets') %}{% set binders = r.get('folders_needed') %}
       {% set flagged = r.get('flagged') %}{% set tabs = r.get('tabs') %}

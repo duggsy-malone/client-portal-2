@@ -1,0 +1,37 @@
+This folder is not the Page Counter app.
+
+These four files are the launcher templates kept with the source code, so the
+build script has something to copy. There's no Python in here, so nothing in
+this folder will start.
+
+THE APP IS ELSEWHERE:
+
+  * Page Counter          - unzip "Page_Counter_desktop.zip". You get a folder
+                            called "Page Counter" with the launcher AND the
+                            code (desktop_app.py, analyzer.py, templates,
+                            static). That's the one to double-click.
+
+  * Flightpath Tester     - unzip "Flightpath Tester.zip", same idea.
+
+To build the Page Counter folder yourself from the current code:
+
+    python3 build_desktop.py        (from the folder above this one)
+
+and for the tester:
+
+    python3 build_tester.py
+
+IF MACOS WON'T RUN THE LAUNCHER
+
+Two different messages, two different fixes:
+
+  "you do not have appropriate access privileges"
+      The file lost its executable flag, which happens with some unzipping
+      tools. In Terminal:
+          chmod +x "/path/to/Page Counter/Page Counter.command"
+      Or just drag the folder in and run it without the flag at all:
+          bash "/path/to/Page Counter/Page Counter.command"
+
+  "cannot be opened because it is from an unidentified developer"
+      macOS quarantines anything downloaded. Right-click the launcher, choose
+      Open, then Open again in the box. Only needed once per folder.

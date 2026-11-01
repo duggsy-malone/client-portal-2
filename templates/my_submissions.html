@@ -24,7 +24,7 @@
     <p class="fp-small" style="margin-top:18px"><a href="{{ url_for('index') }}">&larr; Check in more artwork</a></p>
 
   {% elif mode == 'ask' %}
-    <p class="fp-lede">Everything you've sent to the studio. No account needed &ndash; we'll email you a private link.</p>
+    <p class="fp-lede">Everything you've sent to {{ brand.traffic_control }}. No account needed &ndash; we'll email you a private link.</p>
     {% if link_problem == 'expired' %}
       <div class="fp-note fp-note--warn" style="margin-bottom:16px">That link has expired. Enter your email below and we'll send you a new one.</div>
     {% elif link_problem %}
