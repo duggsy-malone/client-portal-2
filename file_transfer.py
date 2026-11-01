@@ -1,3 +1,7 @@
+# Flightpath - the iPrintManage client upload portal.
+# Copyright (c) 2026 Sandyboy Design and Print Ltd. All rights reserved.
+# Licensed to iPrintManage for its own business use - see LICENSE.
+
 """
 Picks which file-transfer provider to use for uploading a submission's
 original files, so app.py doesn't need to know or care which one is active.

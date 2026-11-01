@@ -1,3 +1,7 @@
+# Flightpath - the iPrintManage client upload portal.
+# Copyright (c) 2026 Sandyboy Design and Print Ltd. All rights reserved.
+# Licensed to iPrintManage for its own business use - see LICENSE.
+
 """
 Sends a slice of a file over HTTP without loading that slice into memory.
 

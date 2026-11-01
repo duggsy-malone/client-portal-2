@@ -1,3 +1,7 @@
+# Flightpath - the iPrintManage client upload portal.
+# Copyright (c) 2026 Sandyboy Design and Print Ltd. All rights reserved.
+# Licensed to iPrintManage for its own business use - see LICENSE.
+
 """Assembles the Page Counter desktop folder from the current portal code, so
 the desktop version and the website can't drift apart."""
 import os
@@ -104,6 +108,8 @@ exit /b 1
 
 readme = os.path.join(SRC, "desktop", "READ ME FIRST.txt")
 shutil.copy2(readme, os.path.join(APP, "READ ME FIRST.txt"))
+# The licence travels with the code, since this folder is the code.
+shutil.copy2(os.path.join(SRC, "LICENSE"), os.path.join(APP, "LICENSE"))
 
 with open(os.path.join(APP, "Page Counter.command"), "w", newline="\n") as fh:
     fh.write(MAC)

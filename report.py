@@ -1,3 +1,7 @@
+# Flightpath - the iPrintManage client upload portal.
+# Copyright (c) 2026 Sandyboy Design and Print Ltd. All rights reserved.
+# Licensed to iPrintManage for its own business use - see LICENSE.
+
 """Builds the report Kaye receives: an HTML email body + a CSV attachment,
 from the list of Row objects produced by the analyzer."""
 
@@ -636,10 +640,12 @@ def rows_to_html(rows, submission_id, client_note="", wetransfer_link=None, wetr
             ("Email", contact.get("email", "")),
             ("Phone", contact.get("phone", "")),
         ]
+        if contact.get("cc_email"):
+            contact_rows.append((branding.LABEL_CC, contact["cc_email"]))
         if contact.get("deadline"):
-            contact_rows.append(("Deadline", contact["deadline"]))
+            contact_rows.append((branding.LABEL_DEADLINE, contact["deadline"]))
         if contact.get("delivery_address"):
-            contact_rows.append(("Delivery address", contact["delivery_address"]))
+            contact_rows.append((branding.LABEL_ADDRESS, contact["delivery_address"]))
         contact_rows_html = "".join(
             f"<tr><td><b>{label}</b></td><td>{_e(value)}</td></tr>" for label, value in contact_rows
         )

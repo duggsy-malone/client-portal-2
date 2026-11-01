@@ -1,3 +1,7 @@
+# Flightpath - the iPrintManage client upload portal.
+# Copyright (c) 2026 Sandyboy Design and Print Ltd. All rights reserved.
+# Licensed to iPrintManage for its own business use - see LICENSE.
+
 """
 Everything about how Flightpath LOOKS and what it SAYS, in one file.
 
@@ -106,7 +110,7 @@ PAGE_TITLE = "Check in your artwork"
 DROP_ZONE = "Drop PDFs or images here. We'll count every page and measure every size."
 DROP_BUTTON = "Choose files"
 DROP_BUTTON_FOLDER = "Choose a folder"
-CLEAR_BUTTON = "Clear board"
+CLEAR_BUTTON = "Clear manifest"   # only shown once there are files on it
 ACCEPTED_LINE = "PDF / JPG / PNG / ZIP / DOCX / XLSX / PPTX - up to 5 GB in total"
 PROCESSING = "Running pre-flight..."
 CLEARED_LABEL = "Cleared"
@@ -114,13 +118,49 @@ NEEDS_LOOK_LABEL = "Needs a look"
 CANT_READ = ("We can't open this file. It may be password-protected. Remove the password and "
              "check it in again.")
 EMPTY_BOARD = "No files checked in yet."
-PRIMARY_ACTION = "Send to studio"
+
+# Duncan's check-in wording. The portal is an airport: files check in, the
+# board shows them departing, and once they've landed the list of what came is
+# the manifest. One token per phrase, so a word can be changed in one place
+# rather than hunted through the templates.
+TRAFFIC_CONTROL = "Print Traffic Control"
+PRIMARY_ACTION = f"Send to {TRAFFIC_CONTROL}"
 BOARD_TITLE = "Departures"
+MANIFEST_TITLE = "Manifest"              # the board's heading once files are on it
 BATCH_TITLE = "This batch"
-SEND_TITLE = "Send to studio"
-CONFIRMATION = "Sent to the studio. Your reference is {reference}."
+SEND_TITLE = f"Send to {TRAFFIC_CONTROL}"
+CONFIRM_MANIFEST = "I've checked the manifest and I can see all of my files."
+
+# Field labels. The keys behind them don't change (a job saved last month still
+# says "deadline" inside), only the words the client reads.
+LABEL_DEADLINE = "Arrival time"
+LABEL_ADDRESS = "Destination address"
+LABEL_CC = "Copy to"
+HINT_CC = "Optional - up to three addresses, separated by commas."
+
+# The project-site offer, shown once the client has checked the manifest and
+# pressed send. iPrintManage builds these (littletewinquiry.co.uk is one), so
+# this is an offer to pass on, not something the portal does by itself.
+PROJECT_SITE_TITLE = "Want these files on their own project website?"
+PROJECT_SITE_BODY = ("iPrintManage can set your documents up on a private website of their own - "
+                     "every file at its own web address, sorted into sections, ready to share with "
+                     "anyone who needs them: a client, a consultant, an inquiry, a planning committee.")
+PROJECT_SITE_EXAMPLE = "It's how we built the Little Tew Inquiry document library."
+PROJECT_SITE_TICK = "Yes, I'd like to hear more about a project website for these files."
+PROJECT_SITE_SMALL = ("This won't change your quote or hold anything up - someone will email you "
+                      "about it separately.")
+PROJECT_SITE_CONTINUE = "Continue"
+PROJECT_SITE_SKIP = "No thanks, just send my files"
+CONFIRMATION = f"Sent to {TRAFFIC_CONTROL}. Your reference is {{reference}}."
+SENT_SHORT = f"Sent to {TRAFFIC_CONTROL}."
+NOT_SENT = f"Nothing was sent to {TRAFFIC_CONTROL}."
+# The heading and subject on the client's confirmation email. "Cleared for
+# print" and "Needs a look" stay as they are: they're the brand guide's own
+# clearance wording, and they go to us rather than to the client.
+RECEIVED_HEADING = f"Received by {TRAFFIC_CONTROL}"
+WITH_US = f"with {TRAFFIC_CONTROL}"
 EMAIL_SUBJECT = "Cleared for print: {reference} ({pages} pages)"
-NEED_A_HAND = ("Your iPrintManage account manager can see everything on this board.")
+NEED_A_HAND = ("Your iPrintManage account manager can see everything on this manifest.")
 
 UPLOAD_INTRO = DROP_ZONE
 REASSURANCE = ("Your files are used only to prepare your quote, are stored securely and are "
@@ -223,9 +263,27 @@ def as_dict():
         "cant_read": CANT_READ,
         "empty_board": EMPTY_BOARD,
         "primary_action": PRIMARY_ACTION,
+        "traffic_control": TRAFFIC_CONTROL,
         "board_title": BOARD_TITLE,
+        "manifest_title": MANIFEST_TITLE,
         "batch_title": BATCH_TITLE,
         "send_title": SEND_TITLE,
+        "confirm_manifest": CONFIRM_MANIFEST,
+        "confirmation": CONFIRMATION,
+        "sent_short": SENT_SHORT,
+        "not_sent": NOT_SENT,
+        "received_heading": RECEIVED_HEADING,
+        "label_deadline": LABEL_DEADLINE,
+        "label_address": LABEL_ADDRESS,
+        "label_cc": LABEL_CC,
+        "hint_cc": HINT_CC,
+        "project_site_title": PROJECT_SITE_TITLE,
+        "project_site_body": PROJECT_SITE_BODY,
+        "project_site_example": PROJECT_SITE_EXAMPLE,
+        "project_site_tick": PROJECT_SITE_TICK,
+        "project_site_small": PROJECT_SITE_SMALL,
+        "project_site_continue": PROJECT_SITE_CONTINUE,
+        "project_site_skip": PROJECT_SITE_SKIP,
         "need_a_hand": NEED_A_HAND,
         "upload_intro": UPLOAD_INTRO,
         "reassurance": REASSURANCE,
@@ -236,7 +294,7 @@ def as_dict():
 
 
 def confirmation(reference):
-    """"Sent to the studio. Your reference is FP-24091." """
+    """"Sent to Print Traffic Control. Your reference is FP-24091." """
     return CONFIRMATION.format(reference=reference)
 
 

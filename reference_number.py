@@ -1,3 +1,7 @@
+# Flightpath - the iPrintManage client upload portal.
+# Copyright (c) 2026 Sandyboy Design and Print Ltd. All rights reserved.
+# Licensed to iPrintManage for its own business use - see LICENSE.
+
 """
 Generates the short, human-friendly reference number shown in each report and
 email - format FP-NNNNN, e.g. FP-24001, FP-24002, ... as set out in the brand

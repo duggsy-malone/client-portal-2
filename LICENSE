@@ -1,0 +1,67 @@
+Flightpath - the iPrintManage client upload portal
+==================================================
+
+Copyright (c) 2026 Sandyboy Design and Print Ltd. All rights reserved.
+
+This software, including its source code, templates, stylesheets, brand assets
+and documentation (together, "the Software"), was written by Sandyboy Design
+and Print Ltd for iPrintManage.
+
+
+OWNERSHIP
+
+The Software is owned by Sandyboy Design and Print Ltd. Nothing in this file
+transfers ownership of it to anyone else.
+
+This includes the parts that do the work of it: the page and size analysis, the
+paper-size matching and bleed tolerances, the sheet, folder, tab and divider
+calculations, the report, and the brand system built around them.
+
+
+WHAT IPRINTMANAGE MAY DO
+
+iPrintManage has permission to use and run the Software for its own business,
+for as long as it wishes: to host it, to take client files through it, to show
+it to its clients, and to have it changed on its behalf by Sandyboy Design and
+Print Ltd.
+
+This permission is given freely and is not time-limited. It is not exclusive:
+Sandyboy Design and Print Ltd may continue to use, develop and license the
+Software and its components elsewhere.
+
+
+WHAT NEEDS PERMISSION IN WRITING
+
+Anyone other than Sandyboy Design and Print Ltd needs its written permission
+before:
+
+  * copying, publishing or distributing the Software or any part of it,
+  * selling it, licensing it, or supplying it to a third party,
+  * using it as the basis of another product, whether by copying the code or by
+    rewriting it from this one,
+  * removing or altering the copyright notices in it.
+
+Running the Software, and reading the source to run or maintain it, do not
+need permission: they are the point of it.
+
+
+NO WARRANTY
+
+The Software is provided as it is. Sandyboy Design and Print Ltd does not
+warrant that it will be free of faults or that it will be available without
+interruption, and accepts no liability for loss arising from its use, so far
+as the law allows. It counts pages and measures sizes to help prepare a quote;
+it is not a substitute for checking a job before it goes to press.
+
+
+ABOUT THIS FILE
+
+This file records what Sandyboy Design and Print Ltd intends, and puts it
+somewhere it can be found - in the code itself. It is not a contract between
+the two companies and it has not been drafted by a solicitor. If anything here
+ever needs to be relied on, or if the two companies want different terms from
+these, it should be written into a proper agreement and looked at by someone
+qualified.
+
+Questions about this notice: Michaela Hesketh, Sandyboy Design and Print Ltd,
+kaye@sandyboy.co.uk

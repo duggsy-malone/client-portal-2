@@ -1,3 +1,7 @@
+# Flightpath - the iPrintManage client upload portal.
+# Copyright (c) 2026 Sandyboy Design and Print Ltd. All rights reserved.
+# Licensed to iPrintManage for its own business use - see LICENSE.
+
 """
 Uploads a submission's original files to WeTransfer and returns a shareable
 download link to put in the report email, instead of (or alongside)

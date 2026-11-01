@@ -1,3 +1,7 @@
+# Flightpath - the iPrintManage client upload portal.
+# Copyright (c) 2026 Sandyboy Design and Print Ltd. All rights reserved.
+# Licensed to iPrintManage for its own business use - see LICENSE.
+
 """
 Sends the analysis report by email.
 
@@ -53,7 +57,30 @@ SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
 
 REPORT_RECIPIENT = os.environ.get("REPORT_RECIPIENT", "kaye@sandyboy.co.uk")
 
+# Where a project-site enquiry goes when a client ticks the offer on the upload
+# page. Comma-separated, same as REPORT_RECIPIENT - these two are the default
+# so it works without anything being set in Render.
+PROJECT_SITE_RECIPIENT = os.environ.get("PROJECT_SITE_RECIPIENT",
+                                        "matthew@iprintmanage.com,kaye@iprintmanage.com")
+
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024  # keep well under typical provider message caps
+
+
+def split_addresses(value):
+    """"a@x.com, b@y.com; c@z.com" -> ["a@x.com", "b@y.com", "c@z.com"].
+    Anything without an @ in it is dropped rather than sent to, and the same
+    address twice is kept once."""
+    out = []
+    for part in (value or "").replace(";", ",").split(","):
+        part = part.strip()
+        if part and "@" in part and part.lower() not in [a.lower() for a in out]:
+            out.append(part)
+    return out
+
+
+def project_site_recipients():
+    """Who hears about a project-site enquiry."""
+    return split_addresses(PROJECT_SITE_RECIPIENT)
 
 
 def _recipient_list():
@@ -200,13 +227,24 @@ def send_report_email(subject, html_body, csv_attachment_name, csv_attachment_by
 EMAIL_REPLY_TO = os.environ.get("EMAIL_REPLY_TO")
 
 
-def send_client_email(to_address, subject, html_body):
+def send_client_email(to_address, subject, html_body, cc=None, reply_to=None):
     """A short email to a CLIENT (not the report inbox) - e.g. their
     confirmation or submission-history link. No attachments.
+
+    `cc` is anyone the client asked to be copied in (see the Copy to field on
+    the upload page). The caller decides what the copies are allowed to see:
+    anything with a private link in it is sent to the copies separately, with
+    the link taken out, rather than passed here.
+
+    `reply_to` overrides EMAIL_REPLY_TO for this one email - used for the
+    project-site enquiry, so replying goes to the client who asked.
+
     Returns (sent: bool, message: str). Never raises."""
     to_address = (to_address or "").strip()
     if not to_address or "@" not in to_address:
         return False, "No valid client email address."
+    cc = [a for a in split_addresses(",".join(cc or [])) if a.lower() != to_address.lower()]
+    reply_to = (reply_to or EMAIL_REPLY_TO or "").strip()
     try:
         if BREVO_API_KEY and EMAIL_FROM:
             payload = {
@@ -215,8 +253,10 @@ def send_client_email(to_address, subject, html_body):
                 "subject": subject,
                 "htmlContent": html_body,
             }
-            if EMAIL_REPLY_TO:
-                payload["replyTo"] = {"email": EMAIL_REPLY_TO}
+            if cc:
+                payload["cc"] = [{"email": a} for a in cc]
+            if reply_to:
+                payload["replyTo"] = {"email": reply_to}
             req = urllib.request.Request(
                 BREVO_API_URL,
                 data=json.dumps(payload).encode("utf-8"),
@@ -226,21 +266,25 @@ def send_client_email(to_address, subject, html_body):
             )
             with urllib.request.urlopen(req, timeout=30) as resp:
                 resp.read()
-            return True, "Client email sent via Brevo."
+            return True, ("Client email sent via Brevo."
+                          + (f" Copied to {len(cc)}." if cc else ""))
         if SMTP_USERNAME and SMTP_PASSWORD:
             msg = EmailMessage()
             msg["Subject"] = subject
             msg["From"] = SMTP_USERNAME
             msg["To"] = to_address
-            if EMAIL_REPLY_TO:
-                msg["Reply-To"] = EMAIL_REPLY_TO
+            if cc:
+                msg["Cc"] = ", ".join(cc)
+            if reply_to:
+                msg["Reply-To"] = reply_to
             msg.set_content("This email needs an HTML-capable email program to display.")
             msg.add_alternative(html_body, subtype="html")
             with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
                 server.starttls()
                 server.login(SMTP_USERNAME, SMTP_PASSWORD)
                 server.send_message(msg)
-            return True, "Client email sent via SMTP."
+            return True, ("Client email sent via SMTP."
+                          + (f" Copied to {len(cc)}." if cc else ""))
         logger.warning(f"No email method configured - client email to {to_address} not sent.")
         return False, "No email method configured."
     except urllib.error.HTTPError as e:
@@ -250,3 +294,15 @@ def send_client_email(to_address, subject, html_body):
     except Exception as e:
         logger.error(f"Client email failed ({e})")
         return False, f"Send failed ({e})."
+
+
+def send_internal_email(recipients, subject, html_body, reply_to=None):
+    """A short email to us, not to a client, and with nothing attached - the
+    project-site enquiry uses this. The first address is the To, the rest are
+    copied in, so a reply-all reaches everyone. Never raises."""
+    recipients = split_addresses(",".join(recipients or []))
+    if not recipients:
+        logger.warning("No recipients configured for an internal email - not sent.")
+        return False, "No recipients configured."
+    return send_client_email(recipients[0], subject, html_body,
+                             cc=recipients[1:], reply_to=reply_to)

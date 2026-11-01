@@ -4,6 +4,21 @@ The portal is called **Flightpath**. The name and version live in `version.py` (
 
 Worth setting in Render too: `EMAIL_FROM_NAME=Flightpath`, so that's the sender name clients see.
 
+## Who owns this
+
+Flightpath was written by Sandyboy Design and Print Ltd for iPrintManage.
+Ownership and what iPrintManage may do with it are set out in **LICENSE**, in
+this folder - short, plain English, and worth reading once.
+
+Every source file carries a three-line notice pointing at it. After adding a
+new file, run:
+
+    python3 add_copyright.py
+
+which adds the notice wherever it's missing and leaves everything else alone.
+`python3 add_copyright.py --check` lists anything without one and changes
+nothing, which is the version to run before handing the code anywhere.
+
 ## Branding
 
 The portal wears the **Flight Path brand guide v1.0** (September 2026). Everything about how it looks and what it says lives in **`branding.py`**: the palette, the fonts, which image files to use, the tagline, every line of portal microcopy, the contact details and the footer legal lines. No page, report or email hard-codes a colour, a font or a line of copy.
@@ -259,6 +274,19 @@ export SMTP_PASSWORD="xxxx xxxx xxxx xxxx"         # a Gmail "App Password" - se
 export REPORT_RECIPIENT="kaye@sandyboy.co.uk"      # where reports get sent TO - comma-separate for more than one
 python3 app.py
 ```
+
+**Who hears about a project-website enquiry.** When a client ticks the project-website
+offer on their way out, the enquiry goes to `PROJECT_SITE_RECIPIENT` - comma-separated,
+same as `REPORT_RECIPIENT`. It defaults to `matthew@iprintmanage.com,kaye@iprintmanage.com`,
+so nothing needs setting in Render for it to work. The first address is the To and the rest
+are copied in, and replies go to the client who asked, so it can be answered from the inbox.
+
+**Copy to.** Clients can name up to three people to be copied in on the emails about their
+job (`cc_email` on the form). They're copied in on the "sent to the studio" confirmation,
+the page-count-ready email and the note about files we may need to ask about. The
+confirmation carries a private "My jobs" link that opens every job ever sent from that
+client's address, so the copies get that email *without* the link, as a separate send -
+never as a Cc. Changing that is a privacy decision, not a formatting one.
 
 **Getting a Gmail App Password** (takes about 2 minutes):
 1. The Gmail account you send FROM must have 2-Step Verification turned on (Google Account → Security).

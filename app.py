@@ -1,3 +1,7 @@
+# Flightpath - the iPrintManage client upload portal.
+# Copyright (c) 2026 Sandyboy Design and Print Ltd. All rights reserved.
+# Licensed to iPrintManage for its own business use - see LICENSE.
+
 """
 Client file-upload portal.
 
@@ -42,7 +46,8 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from analyzer import analyze_file
 from report import rows_to_csv, rows_to_html, build_size_summary, job_totals
-from emailer import send_report_email, send_client_email
+from emailer import (send_report_email, send_client_email, send_internal_email,
+                     project_site_recipients)
 from file_transfer import upload_submission, WETRANSFER_API_KEY
 from reference_number import next_reference_number
 import r2_storage
@@ -86,15 +91,27 @@ ADMIN_KEY = os.environ.get("ADMIN_KEY") or os.environ.get("GDRIVE_ADMIN_KEY")
 
 REQUIRED_FIELDS_ALWAYS = ["subject", "full_name", "company", "email", "phone"]
 REQUIRED_FIELDS_FULL_SUBMISSION = ["deadline", "delivery_address"]
+# The keys are what's stored - a job saved last month still says "deadline"
+# inside - so the words can be changed in branding.py without breaking
+# anything already in storage. cc_email is optional and holds up to
+# MAX_CC_ADDRESSES addresses, comma-separated.
 FIELD_LABELS = {
     "subject": "Subject",
     "full_name": "Full name",
     "company": "Company",
     "email": "Email",
     "phone": "Phone number",
-    "deadline": "Deadline",
-    "delivery_address": "Delivery address",
+    "cc_email": branding.LABEL_CC,
+    "deadline": branding.LABEL_DEADLINE,
+    "delivery_address": branding.LABEL_ADDRESS,
 }
+
+# Three is enough for "my colleague, my architect and my client" without
+# turning the field into a mailing list.
+MAX_CC_ADDRESSES = 3
+# Deliberately loose: it catches a typo like "name@company" or a stray space,
+# and leaves the arguing about exotic-but-legal addresses to the mail server.
+_EMAIL_RE = re.compile(r"^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]{2,}$")
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
@@ -132,6 +149,34 @@ def _parse_iso(value):
         return datetime.now(timezone.utc)
 
 
+def _cc_list(value):
+    """The addresses the client typed into Copy to. Returns (addresses, error);
+    the error is a sentence the client will read, so it names the address at
+    fault rather than just refusing. Semicolons are accepted as well as
+    commas, because Outlook puts semicolons between addresses."""
+    typed = [part.strip() for part in (value or "").replace(";", ",").split(",")]
+    typed = [part for part in typed if part]
+    if len(typed) > MAX_CC_ADDRESSES:
+        return [], (f"Please give at most {MAX_CC_ADDRESSES} \u2018{branding.LABEL_CC}\u2019 "
+                    f"addresses - you've given {len(typed)}.")
+    addresses = []
+    for address in typed:
+        if not _EMAIL_RE.match(address):
+            return [], (f"That \u2018{branding.LABEL_CC}\u2019 address doesn't look right: "
+                        f"{address}. Please check it, or clear the field.")
+        if address.lower() not in [a.lower() for a in addresses]:
+            addresses.append(address)
+    return addresses, None
+
+
+def _copies_for(contact):
+    """Who to copy in on this client's emails. The client's own address is
+    dropped if they typed it in twice, so nobody gets two of everything."""
+    addresses, _error = _cc_list(contact.get("cc_email"))
+    own = (contact.get("email") or "").strip().lower()
+    return [a for a in addresses if a.lower() != own]
+
+
 def _validate_contact(contact, count_only):
     required_fields = list(REQUIRED_FIELDS_ALWAYS)
     if not count_only:
@@ -139,6 +184,9 @@ def _validate_contact(contact, count_only):
     missing = [FIELD_LABELS[f] for f in required_fields if not contact.get(f)]
     if missing:
         return f"Missing required field(s): {', '.join(missing)}"
+    _addresses, cc_error = _cc_list(contact.get("cc_email"))
+    if cc_error:
+        return cc_error
     return None
 
 
@@ -275,6 +323,12 @@ def _plans_flag(value):
     return str(value).strip().lower() in ("1", "true", "on", "yes")
 
 
+def _project_site_flag(value):
+    """Did they tick the project-website offer on the way out? Anything that
+    isn't a clear yes counts as no."""
+    return str(value or "").strip().lower() in ("1", "true", "on", "yes")
+
+
 def _no_store(resp):
     """Private pages (links with a token in them): don't cache them, don't
     leak the address to other sites, keep them out of search engines."""
@@ -345,6 +399,7 @@ def upload():
     contact = _contact_from(request.form)
     folders = _folder_list(request.form.get("folders"))
     plans_to_scale = None if count_only else _plans_flag(request.form.get("plans_to_scale"))
+    project_site = _project_site_flag(request.form.get("project_site"))
 
     error = _validate_contact(contact, count_only) or _validate_file_names([f.filename for f in uploaded_files])
     if error:
@@ -362,6 +417,11 @@ def upload():
     reference_number = next_reference_number()
     logger.info(f"Submission {submission_id} (ref {reference_number}): "
                 f"{len(saved_paths)} file(s) received directly (count_only={count_only}).")
+
+    if project_site:
+        threading.Thread(target=_send_project_site_enquiry,
+                         args=(contact, reference_number, client_note, len(saved_paths)),
+                         kwargs={"count_only": count_only}, daemon=True).start()
 
     if count_only:
         try:
@@ -453,13 +513,19 @@ def upload_finalize():
     contact = _contact_from(data.get("contact") or {})
     folders = _folder_list(data.get("folders"))
     plans_to_scale = None if count_only else _plans_flag(data.get("plans_to_scale"))
+    project_site = _project_site_flag(data.get("project_site"))
     error = _validate_contact(contact, count_only)
     if error:
         return jsonify({"error": error}), 400
 
     portal_url = request.host_url.rstrip("/")
+    if project_site:
+        threading.Thread(target=_send_project_site_enquiry,
+                         args=(contact, reference_number, client_note, len(folders)),
+                         kwargs={"count_only": count_only}, daemon=True).start()
     if count_only:
-        status = _new_count_status(submission_id, reference_number, contact, client_note, folders, portal_url)
+        status = _new_count_status(submission_id, reference_number, contact, client_note, folders, portal_url,
+                                   project_site=project_site)
         _save_status_safe(status)  # recorded in storage too, so a restart can pick it up
         _write_job(submission_id, state="processing", stage="Fetching your files...")
         threading.Thread(target=_run_count_job, args=(submission_id,), kwargs={"status": status},
@@ -480,6 +546,7 @@ def upload_finalize():
         "error": "",
         "stage": "",
         "plans_to_scale": plans_to_scale,
+        "project_site": project_site,
         "folders": folders,
     }
     try:
@@ -556,7 +623,7 @@ def _save_status(status):
 HISTORY_FIELDS = ("submission_id", "reference_number", "contact", "client_note", "created_at", "updated_at",
                   "status", "stage", "error", "file_count", "total_items", "flagged", "sizes",
                   "transfer_link", "has_report", "plans_to_scale", "sheets", "tabs", "dividers",
-                  "folders_needed")
+                  "folders_needed", "project_site")
 
 
 def _record_from_status(status):
@@ -685,7 +752,8 @@ def _count_report(saved_paths, submission_id, client_note, contact, reference_nu
     return html_body, all_rows
 
 
-def _new_count_status(submission_id, reference_number, contact, client_note, folders, portal_url):
+def _new_count_status(submission_id, reference_number, contact, client_note, folders, portal_url,
+                      project_site=False):
     return {
         "submission_id": submission_id,
         "reference_number": reference_number,
@@ -695,6 +763,7 @@ def _new_count_status(submission_id, reference_number, contact, client_note, fol
         "client_note": client_note,
         "folders": folders,
         "portal_url": portal_url,
+        "project_site": project_site,
         "created_at": _now_iso(),
         "updated_at": _now_iso(),
         "attempts": 0,
@@ -719,20 +788,21 @@ def _send_count_notice(status, totals):
     try:
         contact = status.get("contact", {})
         ref = status.get("reference_number", "?")
+        emailer_recipients = project_site_recipients()
         rows = "".join(
             f"<tr><td style='padding:3px 10px 3px 0'><b>{FIELD_LABELS[k]}</b></td>"
             f"<td>{html_lib.escape(contact.get(k, ''))}</td></tr>"
             for k in FIELD_LABELS if contact.get(k))
-        figures = [("Pages / items", status.get("total_items")), ("Sheets of paper", status.get("sheets")),
-                   ("Folders", status.get("folders_needed")), ("Tabs", status.get("tabs")),
-                   ("Dividers", status.get("dividers")), ("Files", status.get("file_count"))]
-        totals_rows = "".join(
-            f"<tr><td style='padding:3px 10px 3px 0'><b>{label}</b></td><td>{value:,}</td></tr>"
-            for label, value in figures if isinstance(value, int))
+        figures = _count_figures(status)
+        totals_rows = _figure_rows(figures)
         note = status.get("client_note")
+        site_part = (f"<p><b>&#9992; They ticked the project-website offer</b> - "
+                     f"{', '.join(emailer_recipients)} have the enquiry.</p>"
+                     if status.get("project_site") else "")
         body = (f"<p><b>Self-service page count</b> - this client counted their own pages. "
                 f"Nothing was sent to us and their files have been deleted.</p>"
-                f"<h3>Client details</h3><table>{rows}</table>"
+                + site_part
+                + f"<h3>Client details</h3><table>{rows}</table>"
                 + (f"<p><b>Client note:</b> {html_lib.escape(note)}</p>" if note else "")
                 + f"<h3>Totals</h3><table>{totals_rows}</table>"
                 + f"<p style='font-size:12px;color:#777'>{APP_NAME} V{VERSION}. "
@@ -787,6 +857,8 @@ def _run_count_job(submission_id, status=None):
         _running_jobs.add(submission_id)
     local_dir = os.path.join(UPLOAD_DIR, submission_id)
     finished = False
+    stop_heartbeat = threading.Event()
+    heartbeat_thread = None
     try:
         if status is None:
             status = _load_status(submission_id)
@@ -808,8 +880,37 @@ def _run_count_job(submission_id, status=None):
                               "self-service count. Please send them over for a quote instead, or contact us."))
             finished = True
             return
+        # Every field is created up front, because the heartbeat below saves
+        # this same dict: adding a key while it's being written out would break
+        # that write. (The quote job does the same, for the same reason.)
+        for field, empty in (("stage", ""), ("file_count", None), ("total_items", None),
+                             ("flagged", None), ("sizes", []), ("sheets", None), ("tabs", None),
+                             ("dividers", None), ("folders_needed", None), ("has_report", False),
+                             ("folders", []), ("project_site", False), ("error", "")):
+            status.setdefault(field, empty)
         _save_status_safe(status)
         _write_job(submission_id, state="processing", stage=status.get("stage") or "Fetching your files...")
+
+        def heartbeat():
+            """Keeps updated_at fresh while the job is running, so the hourly
+            housekeeping sweep can't decide a long count has stalled and start
+            it a second time in the other worker. Progress is already written
+            as each file starts, but a single huge ZIP - or building the report
+            on a very large job - can go quiet for longer than the stalled-job
+            window, and that is the whole of the 15-minute problem. Quote jobs
+            have had this since the storage work went in; counts hadn't.
+
+            It only touches updated_at, so it cannot change what the job does:
+            if the job really has died, the heartbeat dies with it and the
+            sweep picks the job up exactly as it does today."""
+            while not stop_heartbeat.wait(HEARTBEAT_SECONDS):
+                try:
+                    _save_status_safe(status)
+                except Exception:
+                    pass
+
+        heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
+        heartbeat_thread.start()
 
         contact = status.get("contact", {})
         client_note = status.get("client_note", "")
@@ -871,6 +972,7 @@ def _run_count_job(submission_id, status=None):
         finished = True
         logger.info(f"{label}: report ready.")
         _send_count_notice(status, totals)
+        _send_count_ready_email(status)
     except Exception as e:
         logger.exception(f"Count-only {submission_id}: failed - {e}")
         _write_job(submission_id, state="error",
@@ -881,6 +983,12 @@ def _run_count_job(submission_id, status=None):
             _save_status_safe(status)
         finished = True
     finally:
+        # Stopped first, and waited for: a heartbeat that fired after the files
+        # were cleared would write the job's record straight back into storage
+        # and leave it there for good.
+        stop_heartbeat.set()
+        if heartbeat_thread is not None:
+            heartbeat_thread.join(timeout=5)
         shutil.rmtree(local_dir, ignore_errors=True)
         with _running_lock:
             _running_jobs.discard(submission_id)
@@ -1131,6 +1239,8 @@ def process_submission(submission_id, saved_paths, client_note, contact, referen
             reports_dir=REPORTS_DIR,
         )
         logger.info(f"Submission {submission_id}: email sent={sent} - {message}")
+        if flagged and contact:
+            _send_flagged_notice(contact, reference_number, [r for r in all_rows if r.flagged])
     except Exception as e:
         logger.exception(f"Failed to process submission {submission_id}: {e}")
         return False  # caller keeps the files and alerts Kaye
@@ -1398,35 +1508,230 @@ def _button(url, text):
             f'border-radius:8px;text-decoration:none;font-weight:bold">{html_lib.escape(text)}</a></p>')
 
 
+def _email_client_and_copies(contact, subject, client_html, copy_html=None, label="Client email"):
+    """Sends one email to the client, and the same thing to anyone they asked
+    us to copy in on the upload page.
+
+    Where the client's own email carries their private My jobs link, pass a
+    `copy_html` without it: that link opens every job ever sent from their
+    address, so it is never forwarded to a third party. Those copies go out as
+    separate emails. Everything else is a plain Cc, so the client can see who
+    else has it. Never raises."""
+    copies = _copies_for(contact)
+    try:
+        if copy_html is None:
+            sent, message = send_client_email(contact.get("email"), subject, client_html, cc=copies)
+            logger.info(f"{label}: sent={sent} ({len(copies)} copied in) - {message}")
+            return
+        sent, message = send_client_email(contact.get("email"), subject, client_html)
+        logger.info(f"{label}: sent={sent} - {message}")
+        for address in copies:
+            sent, message = send_client_email(address, subject, copy_html)
+            logger.info(f"{label}: copy to {address} sent={sent} - {message}")
+    except Exception as e:
+        logger.warning(f"{label} failed: {e}")
+
+
+def _copies_line(contact):
+    """The line in the client's own email telling them who else got it, so a
+    copy is never a surprise."""
+    copies = _copies_for(contact)
+    if not copies:
+        return ""
+    names = ", ".join(html_lib.escape(a) for a in copies)
+    return f"<p>We've copied <b>{names}</b> in on this, as you asked.</p>"
+
+
+def _plans_paragraph(plans_to_scale):
+    return {
+        True: "<p>You asked for plans to be <b>printed to scale</b>.</p>",
+        False: "<p>You didn't tick <b>plans printed to scale</b>, so plans will be printed at A3 and "
+               "folded. If that's not right, just reply to let us know.</p>",
+        None: "",
+    }[plans_to_scale]
+
+
 def _send_confirmation_email(contact, reference_number, portal_url, plans_to_scale=None):
     """Tells the client their quote request arrived, with their reference
-    number and a link to their submission history. Never raises."""
+    number and a link to their submission history. Anyone in Copy to gets the
+    same news without the link. Never raises."""
     if not history.is_enabled():
         return
     try:
         first_name = (contact.get("full_name") or "").split(" ")[0]
         link = _history_link(portal_url, contact.get("email"))
         subject_line = contact.get("subject") or "your quote request"
-        body = _email_wrapper(
+        ref = html_lib.escape(reference_number)
+        job = html_lib.escape(subject_line)
+        plans = _plans_paragraph(plans_to_scale)
+        client_body = _email_wrapper(
             f"<p>Hi {html_lib.escape(first_name) or 'there'},</p>"
-            f"<p>Your files for <b>{html_lib.escape(subject_line)}</b> are with the studio. "
-            f"Your reference is <b>{html_lib.escape(reference_number)}</b>. "
+            f"<p>Your files for <b>{job}</b> are {branding.WITH_US}. "
+            f"Your reference is <b>{ref}</b>. "
             f"We'll be in touch with your quote shortly.</p>"
-            + ({True: "<p>You asked for plans to be <b>printed to scale</b>.</p>",
-                False: "<p>You didn't tick <b>plans printed to scale</b>, so plans will be printed at A3 and "
-                       "folded. If that's not right, just reply to let us know.</p>",
-                None: ""}[plans_to_scale]) +
-            f"<p>You can see everything you've sent us from this email address here:</p>"
+            + plans
+            + _copies_line(contact)
+            + f"<p>You can see everything you've sent us from this email address here:</p>"
             + _button(link, "View my jobs") +
             f"<p style=\"font-size:12px;color:#777\">This link is private to you and works for "
             f"{history.LINK_VALID_DAYS} days. You can get a new one any time at "
             f"{html_lib.escape(portal_url)}/my-submissions</p>",
-            heading="Sent to the studio")
-        sent, message = send_client_email(contact.get("email"),
-                                          f"Sent to the studio: {reference_number}", body)
-        logger.info(f"Confirmation email for {reference_number}: sent={sent} - {message}")
+            heading=branding.RECEIVED_HEADING)
+        sender = html_lib.escape(contact.get("full_name") or contact.get("email") or "A client")
+        company = html_lib.escape(contact.get("company") or "")
+        copy_body = _email_wrapper(
+            f"<p>Hi,</p>"
+            f"<p><b>{sender}</b>{f' at {company}' if company else ''} has sent files to "
+            f"{branding.TRAFFIC_CONTROL} for <b>{job}</b> and asked us to keep you copied in. "
+            f"The reference is <b>{ref}</b>.</p>"
+            + plans
+            + f"<p>We'll be in touch with the quote shortly. There's nothing for you to do.</p>"
+            f"<p style=\"font-size:12px;color:#777\">You're seeing this because "
+            f"{html_lib.escape(contact.get('email') or 'the sender')} asked for you to be copied in. "
+            f"Reply to this email if that's not right.</p>",
+            heading=branding.RECEIVED_HEADING)
+        _email_client_and_copies(contact, f"{branding.RECEIVED_HEADING}: {reference_number}",
+                                 client_body, copy_body,
+                                 label=f"Confirmation email for {reference_number}")
     except Exception as e:
         logger.warning(f"Confirmation email for {reference_number} failed: {e}")
+
+
+def _figure_rows(figures):
+    return "".join(
+        f"<tr><td style='padding:3px 14px 3px 0'><b>{label}</b></td><td>{value:,}</td></tr>"
+        for label, value in figures if isinstance(value, int))
+
+
+def _count_figures(status):
+    return [("Pages / items", status.get("total_items")), ("Sheets of paper", status.get("sheets")),
+            ("Folders", status.get("folders_needed")), ("Tabs", status.get("tabs")),
+            ("Dividers", status.get("dividers")), ("Files", status.get("file_count"))]
+
+
+def _send_count_ready_email(status):
+    """Automatic: fires when a self-service page count finishes, so the client
+    has the figures in writing even if they closed the tab. Anyone in Copy to
+    gets the figures without the private My jobs link. Never raises."""
+    try:
+        contact = status.get("contact") or {}
+        ref = status.get("reference_number", "")
+        portal_url = status.get("portal_url") or ""
+        figures = _count_figures(status)
+        table = _figure_rows(figures)
+        if not table:
+            return
+        first_name = (contact.get("full_name") or "").split(" ")[0]
+        job = html_lib.escape(contact.get("subject") or "your files")
+        totals_html = (f"<p>Here's what we counted in <b>{job}</b> "
+                       f"(reference <b>{html_lib.escape(ref)}</b>):</p>"
+                       f"<table>{table}</table>")
+        link_html = ""
+        if history.is_enabled() and portal_url and contact.get("email"):
+            link_html = (f"<p>Your full report, file by file, is here:</p>"
+                         + _button(_history_link(portal_url, contact.get("email")), "View my jobs")
+                         + f"<p style=\"font-size:12px;color:#777\">This link is private to you and "
+                           f"works for {history.LINK_VALID_DAYS} days.</p>")
+        client_body = _email_wrapper(
+            f"<p>Hi {html_lib.escape(first_name) or 'there'},</p>"
+            f"<p>Your page count is done. Nothing was sent off for a quote, and your files have "
+            f"been deleted from our storage.</p>"
+            + totals_html
+            + _copies_line(contact)
+            + link_html
+            + f"<p>If you'd like us to quote for printing this, just reply and we'll pick it up.</p>",
+            heading="Your page count is ready")
+        sender = html_lib.escape(contact.get("full_name") or contact.get("email") or "A client")
+        copy_body = _email_wrapper(
+            f"<p>Hi,</p>"
+            f"<p><b>{sender}</b> counted the pages in <b>{job}</b> and asked us to copy you in. "
+            f"The reference is <b>{html_lib.escape(ref)}</b>.</p>"
+            + totals_html
+            + f"<p>Nothing has been sent off for a quote, and there's nothing for you to do.</p>",
+            heading="A page count you've been copied in on")
+        pages = status.get("total_items")
+        subject = (f"Page count ready: {ref}" + (f" ({pages:,} pages)" if isinstance(pages, int) else ""))
+        _email_client_and_copies(contact, subject, client_body, copy_body,
+                                 label=f"Count-ready email for {ref}")
+    except Exception as e:
+        logger.warning(f"Count-ready email failed: {e}")
+
+
+# How many file names to name in the note below before it starts listing for
+# the sake of listing.
+FLAGGED_NAMES_SHOWN = 10
+
+
+def _send_flagged_notice(contact, reference_number, flagged_rows):
+    """Automatic: fires when a quote job has files we may need to ask
+    about. Deliberately reassuring - it isn't a job for the client to do, it's
+    a heads-up that we might be in touch. Never raises."""
+    try:
+        names = []
+        for row in flagged_rows:
+            name = row.source_file or ""
+            if name and name not in names:
+                names.append(name)
+        if not names:
+            return
+        shown = names[:FLAGGED_NAMES_SHOWN]
+        items = "".join(f"<li>{html_lib.escape(n)}</li>" for n in shown)
+        more = (f"<p class=\"small\">...and {len(names) - len(shown)} more.</p>"
+                if len(names) > len(shown) else "")
+        first_name = (contact.get("full_name") or "").split(" ")[0]
+        job = html_lib.escape(contact.get("subject") or "your job")
+        ref = html_lib.escape(reference_number)
+        shared = (f"<p>Please be aware that we may contact you separately about these files:</p>"
+                  f"<ul>{items}</ul>{more}"
+                  f"<p>There's no need to worry and nothing for you to do - we'll get in touch if "
+                  f"we need any further information.</p>")
+        client_body = _email_wrapper(
+            f"<p>Hi {html_lib.escape(first_name) or 'there'},</p>"
+            f"<p>Your files for <b>{job}</b> (reference <b>{ref}</b>) are {branding.WITH_US} "
+            f"and your quote is being put together.</p>"
+            + shared
+            + _copies_line(contact),
+            heading="A note about your files")
+        _email_client_and_copies(contact, f"A note about your files: {reference_number}",
+                                 client_body,
+                                 label=f"Flagged-files note for {reference_number}")
+    except Exception as e:
+        logger.warning(f"Flagged-files note for {reference_number} failed: {e}")
+
+
+def _send_project_site_enquiry(contact, reference_number, client_note, file_count, count_only=False):
+    """Sent to us, not the client: somebody ticked the project-website offer on
+    their way out. Replies go to the client, so it can be answered straight
+    from the inbox. Never raises."""
+    try:
+        recipients = project_site_recipients()
+        if not recipients:
+            logger.warning("Project-site enquiry not sent: no recipients configured.")
+            return
+        rows = "".join(
+            f"<tr><td style='padding:3px 14px 3px 0'><b>{FIELD_LABELS[k]}</b></td>"
+            f"<td>{html_lib.escape(contact.get(k, ''))}</td></tr>"
+            for k in FIELD_LABELS if contact.get(k))
+        kind = "page count" if count_only else "quote request"
+        body = (f"<p><b>{html_lib.escape(contact.get('full_name') or 'A client')}</b>"
+                + (f" at <b>{html_lib.escape(contact.get('company'))}</b>" if contact.get("company") else "")
+                + f" ticked the project-website offer while sending a {kind} through Flightpath.</p>"
+                f"<p>Reference <b>{html_lib.escape(reference_number)}</b>, {file_count or 0} file(s). "
+                f"They're expecting someone to email them about it.</p>"
+                f"<h3>Their details</h3><table>{rows}</table>"
+                + (f"<p><b>Their note on the job:</b> {html_lib.escape(client_note)}</p>"
+                   if client_note else "")
+                + f"<p style='font-size:12px;color:#777'>Reply to this email to answer them "
+                  f"directly. Sent by {APP_NAME} V{VERSION}.</p>")
+        subject = (f"Project site enquiry: {reference_number} - "
+                   f"{contact.get('company') or contact.get('full_name') or 'client'}")
+        sent, message = send_internal_email(
+            recipients, subject,
+            _email_wrapper(body, heading="Project site enquiry"),
+            reply_to=contact.get("email"))
+        logger.info(f"Project-site enquiry for {reference_number}: sent={sent} - {message}")
+    except Exception as e:
+        logger.warning(f"Project-site enquiry for {reference_number} failed: {e}")
 
 
 CLIENT_STATUS_LABELS = {
