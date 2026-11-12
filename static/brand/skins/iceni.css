@@ -1,0 +1,71 @@
+/* Flightpath - the iPrintManage client upload portal.
+   Copyright (c) 2026 Sandyboy Design and Print Ltd. All rights reserved.
+   Licensed to iPrintManage for its own business use - see LICENSE. */
+
+/* ==========================================================================
+   Iceni Projects skin. Loaded after flightpath.css, and only when Flightpath
+   is opened with ?brand=iceni (the Iceni portal's embed). The brand colours
+   themselves arrive from branding.SKINS["iceni"]; this file re-tints the few
+   warm, orange-family shades the main stylesheet sets directly, and swaps the
+   lockup for "iceni x Flightpath".
+
+   Iceni palette: navy #1C2E5A, ink #121C38, cyan #00BCDE (#00809B for small
+   text on light grounds), slate #5B6680, mist #F3F6FA, line #E1E6EF.
+   ========================================================================== */
+
+/* --- lockup: iceni x Flightpath ----------------------------------------- */
+.fp-lockup--skin { gap: 10px; }
+.fp-lockup--skin > img:not(.fp-skin-logo) { display: none; }   /* the orange tile */
+.fp-skin-logo { height: 24px; width: auto; display: block; }
+.fp-skin-x { color: var(--fp-cyan); font-weight: 600; font-size: 18px; line-height: 1; }
+.fp-lockup--skin .fp-wordmark { font-size: 22px; font-weight: 700; }
+.fp-lockup--skin .fp-wordmark em { color: var(--fp-ember); }
+
+/* --- type: Work Sans 600 headings, like the portal ---------------------- */
+h1, .fp-h1 { font-weight: 600; letter-spacing: -0.03em; }
+h2, .fp-h2, h3, .fp-h3 { font-weight: 600; }
+.fp-label, .fp-board__head .fp-label, .fp-scale__title { letter-spacing: 0.12em; }
+
+/* --- nav ---------------------------------------------------------------- */
+.fp-nav a[aria-current="page"] { background: var(--fp-navy); color: #fff; }
+.fp-nav a:hover { background: #fff; }
+
+/* --- buttons: cyan with ink text, navy hover ---------------------------- */
+.fp-btn { color: #121C38; border-radius: 999px; }
+.fp-btn:hover { background: var(--fp-navy); color: #fff; }
+.fp-btn--ghost { color: var(--fp-navy); border-color: #D3DAE6; }
+.fp-btn--ghost:hover { background: #F1F4F9; color: var(--fp-navy); }
+.fp-btn--navy:hover { background: #2A4378; }
+.fp-btn:disabled, .fp-btn[disabled] { background: #E6EBF2; color: #9AA4B8; }
+
+/* --- the drop zone ------------------------------------------------------ */
+.fp-checkin:hover { background: #F8FCFE; }
+.fp-checkin.is-dragover { background: #E6F7FB; border-color: var(--fp-navy); }
+
+/* --- form fields -------------------------------------------------------- */
+.fp-field input, .fp-field textarea, .fp-input { border-color: #D3DAE6; }
+.fp-field input::placeholder, .fp-input::placeholder { color: #9AA4B8; }
+
+/* --- progress ----------------------------------------------------------- */
+progress.fp-progress, progress.fp-progress::-webkit-progress-bar { background: #E1E6EF; }
+
+/* --- tick boxes: cool, not peach --------------------------------------- */
+.fp-tick { background: #EEF6FA; border-color: #C9E6F0; color: var(--fp-navy); }
+.fp-scale {
+  background: #E6F7FB; border-color: var(--fp-cyan); box-shadow: 0 2px 0 rgba(0,188,222,.25);
+}
+.fp-scale__title { color: var(--fp-navy); }
+.fp-scale__sub { color: #3E4B69; }
+.fp-scale.is-ticked { background: #E3E9F4; border-color: var(--fp-navy); }
+.fp-scale.is-ticked .fp-scale__sub { color: #3E4B69; }
+.fp-note--warn { color: #5A4200; background: #FFF6DE; border-color: #EBD596; }
+
+/* "Needs a look" keeps a warm amber so it never reads as "in progress" cyan. */
+.fp-pill--look { color: #FFC857; background: rgba(255,200,87,.16); }
+.fp-onpaper .fp-pill--look { color: #7A5600; background: rgba(255,200,87,.25); }
+
+/* --- tables, footer, the project-website offer ------------------------- */
+.fp-table tbody tr:nth-child(even) td { background: #F8FAFC; }
+.fp-foot__legal { color: #8A93A6; }
+.fp-modal { background: rgba(18, 28, 56, .55); }
+.fp-modal__sheet { box-shadow: 0 18px 50px rgba(18, 28, 56, .32); }

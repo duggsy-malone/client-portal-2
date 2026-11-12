@@ -13,6 +13,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="{{ brand.font_google_url }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='brand/flightpath.css') }}?v={{ version }}">
+{% if brand.skin_stylesheet %}<link rel="stylesheet" href="{{ url_for('static', filename=brand.skin_stylesheet) }}?v={{ version }}">{% endif %}
 <style>
   :root {
     --fp-orange: {{ brand.colour_primary }};

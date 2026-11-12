@@ -104,6 +104,9 @@ FIELD_LABELS = {
     "cc_email": branding.LABEL_CC,
     "deadline": branding.LABEL_DEADLINE,
     "delivery_address": branding.LABEL_ADDRESS,
+    # Filled in only when a job comes through a client's own portal (a skin,
+    # see branding.SKINS) - e.g. "Iceni Projects portal". Never typed by the client.
+    "portal": "Sent from",
 }
 
 # Three is enough for "my colleague, my architect and my client" without
@@ -290,7 +293,12 @@ def _status_key(submission_id):
 
 
 def _contact_from(source):
-    return {field: (str(source.get(field) or "")).strip() for field in FIELD_LABELS}
+    contact = {field: (str(source.get(field) or "")).strip() for field in FIELD_LABELS}
+    # Only a real skin may label a job; anything else is dropped, so the
+    # field can't be used to put arbitrary text in our emails.
+    chosen = branding.skin(contact.get("portal"))
+    contact["portal"] = f"{chosen['label']} portal" if chosen else ""
+    return contact
 
 
 def _folder_list(value):
@@ -358,10 +366,49 @@ def _start_background_jobs():
     _ensure_background_started()
 
 
+# --------------------------------------------------------------------------
+# Client skins (branding.SKINS). The portal that embeds Flightpath asks for
+# its skin with ?brand=<key>. The choice is carried on every link inside the
+# frame (skin_qs), and kept in a cookie as a back-up for anything that isn't a
+# link; Safari blocks cookies inside frames, which is why the links carry it too.
+# --------------------------------------------------------------------------
+SKIN_COOKIE = "fp_skin"
+
+# Sites allowed to show Flightpath inside one of their pages. Anywhere else
+# gets a blank frame, so a look-alike site can't wrap the real portal.
+FRAME_ANCESTORS = ("'self' https://iprintmanage.com https://www.iprintmanage.com "
+                   "https://*.iprintmanage.com")
+
+
+def _current_skin():
+    """The skin key for this request, or "" for standard Flightpath."""
+    asked = request.args.get("brand")
+    if asked is not None:  # an explicit ?brand= (even an empty one) wins
+        return asked.strip().lower() if branding.skin(asked) else ""
+    remembered = request.cookies.get(SKIN_COOKIE, "")
+    return remembered if branding.skin(remembered) else ""
+
+
 @app.context_processor
 def _brand_values():
     """Colours, logos and wording for every page - see branding.py."""
-    return {"brand": branding.as_dict(), "app_name": APP_NAME, "version": VERSION}
+    key = _current_skin()
+    return {"brand": branding.as_dict(key), "app_name": APP_NAME, "version": VERSION,
+            "skin_qs": f"?brand={key}" if key else ""}
+
+
+@app.after_request
+def _skin_and_frame_headers(response):
+    response.headers["Content-Security-Policy"] = f"frame-ancestors {FRAME_ANCESTORS}"
+    asked = request.args.get("brand")
+    if asked is not None:
+        key = asked.strip().lower() if branding.skin(asked) else ""
+        if key:
+            response.set_cookie(SKIN_COOKIE, key, max_age=60 * 60 * 24 * 30, secure=True,
+                                httponly=True, samesite="None")
+        else:
+            response.delete_cookie(SKIN_COOKIE, secure=True, samesite="None")
+    return response
 
 
 @app.route("/")
@@ -1812,7 +1859,7 @@ def my_submissions():
 @app.route("/my-submissions", methods=["POST"])
 def my_submissions_request_link():
     if not history.is_enabled():
-        return redirect(url_for("my_submissions"))
+        return redirect(url_for("my_submissions", **({"brand": _current_skin()} if _current_skin() else {})))
     email = (request.form.get("email") or "").strip()
     if "@" in email and len(email) <= 254:
         key = history.email_key(email)
@@ -1849,7 +1896,7 @@ def my_submission_report():
     c, x, t, sid = (request.args.get(k) for k in ("c", "x", "t", "sid"))
     ok, _reason = history.check_link_params(_token_secret(), c, x, t)
     if not ok or not re.fullmatch(SUBMISSION_ID_RE, sid or "") or not history.is_enabled():
-        return redirect(url_for("my_submissions"))
+        return redirect(url_for("my_submissions", **({"brand": _current_skin()} if _current_skin() else {})))
     if not history.client_owns(c, sid):
         return "Not found.", 404
     report_html = history.get_report(sid)

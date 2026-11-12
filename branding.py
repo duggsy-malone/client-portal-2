@@ -198,9 +198,53 @@ FOOTER_LINKS = [
 ]
 
 
-def as_dict():
-    """Everything the templates need, in one go."""
-    return {
+# --------------------------------------------------------------------------
+# Client skins - a client's own look, for when Flightpath sits inside their
+# private iPrintManage portal (e.g. iceni.iprintmanage.com/flightpath/).
+#
+# A skin is switched on by adding ?brand=<key> to the Flightpath address the
+# portal embeds, and only then. Without it - iprintmanage.com, the emails,
+# every other client - Flightpath looks exactly as the brand guide says.
+# A skin only overrides the values it lists; everything else comes from the
+# defaults above. Its stylesheet (static/brand/skins/) handles the few tints
+# the main stylesheet sets directly.
+# --------------------------------------------------------------------------
+SKINS = {
+    "iceni": {
+        "label": "Iceni Projects",          # shown to the studio as "Sent from"
+        "stylesheet": "brand/skins/iceni.css",
+        "logo": "brand/skins/iceni-wordmark-navy.svg",
+        "logo_alt": "iceni",
+        "values": {
+            "colour_primary": "#00BCDE",      # Iceni cyan - buttons, drop zone
+            "colour_beacon": "#7FDDEE",       # lighter cyan - text on navy, hovers
+            "colour_navy": "#1C2E5A",         # Iceni navy - type and the board
+            "colour_paper": "#F3F6FA",
+            "colour_cyan": "#00BCDE",
+            "colour_ember": "#00809B",        # small text and links on light grounds
+            "colour_accent": "#00BCDE",
+            "colour_amber": "#7FDDEE",
+            "colour_page": "#F3F6FA",
+            "colour_text": "#1C2E5A",
+            "colour_muted": "#5B6680",
+            "colour_line": "#E1E6EF",
+            "colour_tile": "#E3F4F9",
+            "font_label": FONT_BODY,          # Work Sans throughout, like the Iceni portal
+            "dart": "brand/skins/iceni-dart.svg",
+        },
+    },
+}
+
+
+def skin(key):
+    """The skin called `key`, or None if there isn't one (or key is empty)."""
+    return SKINS.get((key or "").strip().lower())
+
+
+def as_dict(skin_key=None):
+    """Everything the templates need, in one go. With a skin key, that
+    client's values replace the defaults."""
+    values = {
         # colour
         "colour_primary": COLOUR_PRIMARY,
         "colour_beacon": COLOUR_BEACON,
@@ -291,6 +335,16 @@ def as_dict():
         "footer_legal": [line for line in FOOTER_LEGAL if line.strip()],
         "footer_links": FOOTER_LINKS,
     }
+    chosen = skin(skin_key)
+    if chosen:
+        values.update(chosen["values"])
+        values.update({"skin": skin_key.strip().lower(), "skin_label": chosen["label"],
+                       "skin_stylesheet": chosen["stylesheet"], "skin_logo": chosen["logo"],
+                       "skin_logo_alt": chosen["logo_alt"]})
+    else:
+        values.update({"skin": "", "skin_label": "", "skin_stylesheet": "", "skin_logo": "",
+                       "skin_logo_alt": ""})
+    return values
 
 
 def confirmation(reference):

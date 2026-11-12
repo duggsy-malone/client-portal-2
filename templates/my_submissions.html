@@ -21,7 +21,7 @@
       <b>Check your inbox.</b> If we have any jobs for that email address, we've sent it a private link to see them.
       It can take a minute or two to arrive &ndash; check your spam folder if it doesn't show up.
     </div>
-    <p class="fp-small" style="margin-top:18px"><a href="{{ url_for('index') }}">&larr; Check in more artwork</a></p>
+    <p class="fp-small" style="margin-top:18px"><a href="{{ url_for('index') }}{{ skin_qs }}">&larr; Check in more artwork</a></p>
 
   {% elif mode == 'ask' %}
     <p class="fp-lede">Everything you've sent to {{ brand.traffic_control }}. No account needed &ndash; we'll email you a private link.</p>
@@ -30,13 +30,13 @@
     {% elif link_problem %}
       <div class="fp-note fp-note--warn" style="margin-bottom:16px">That link isn't valid (it may have been cut short when copied). Enter your email below for a new one.</div>
     {% endif %}
-    <form class="fp-card" method="post" action="{{ url_for('my_submissions_request_link') }}">
+    <form class="fp-card" method="post" action="{{ url_for('my_submissions_request_link') }}{{ skin_qs }}">
       <label class="fp-field">The email address you used when you checked in your files
         <input type="email" name="email" required autocomplete="email">
       </label>
       <button type="submit" class="fp-btn fp-btn--block" style="margin-top:14px">Email me my link</button>
     </form>
-    <p class="fp-small" style="margin-top:18px"><a href="{{ url_for('index') }}">&larr; Check in more artwork</a></p>
+    <p class="fp-small" style="margin-top:18px"><a href="{{ url_for('index') }}{{ skin_qs }}">&larr; Check in more artwork</a></p>
 
   {% elif mode == 'list' %}
     <p class="fp-lede">Everything sent from your email address, newest first.</p>
@@ -93,7 +93,7 @@
     {% endfor %}
     <p class="fp-small fp-muted" style="margin-top:20px">This private link works until {{ expires }}.
       Please don't share it &ndash; anyone with it can see this page.
-      <br><a href="{{ url_for('index') }}">Check in more artwork</a></p>
+      <br><a href="{{ url_for('index') }}{{ skin_qs }}">Check in more artwork</a></p>
   {% endif %}
 
   {% include '_footer.html' %}

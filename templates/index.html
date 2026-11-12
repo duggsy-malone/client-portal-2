@@ -197,6 +197,8 @@ const MAX_CC_ADDRESSES = 3;
 const CONFIRMATION = {{ brand.confirmation | tojson }};
 const SENT_SHORT = {{ brand.sent_short | tojson }};
 const NOT_SENT = {{ brand.not_sent | tojson }};
+const SKIN = {{ brand.skin | tojson }};
+const SKIN_QS = {{ skin_qs | tojson }};
 
 plansToScaleEl.addEventListener('change', () => plansBoxEl.classList.toggle('is-ticked', plansToScaleEl.checked));
 
@@ -572,6 +574,7 @@ function buildContactPayload() {
     deadline: fieldInputs.deadline.value.trim(),
     delivery_address: fieldInputs.deliveryAddress.value.trim(),
     cc_email: fieldInputs.ccEmail.value.trim(),
+    portal: SKIN,
   };
 }
 
@@ -678,7 +681,7 @@ function addHistoryLine(parent, text) {
   p.style.fontSize = '13px';
   p.appendChild(document.createTextNode(text + ' '));
   const a = document.createElement('a');
-  a.href = '/my-submissions';
+  a.href = '/my-submissions' + SKIN_QS;
   a.textContent = 'My jobs';
   p.appendChild(a);
   parent.appendChild(p);
