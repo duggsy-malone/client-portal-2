@@ -33,3 +33,41 @@
     --fp-mono: {{ brand.font_mono | safe }};
   }
 </style>
+{# When Flightpath sits inside another page (the client portals), tell that page
+   how tall we are, so it can size the frame to fit and there's only one scroll
+   bar. Also ask it to scroll to anything that pops up (the project-website
+   offer), since a tall frame would otherwise centre it out of view, and to the
+   top when a new page loads. Only a height and a position are sent - nothing
+   about the client or their files. Outside a frame this does nothing. #}
+<script>
+(function () {
+  if (window.parent === window) return;
+  var last = 0;
+  function post(msg) { try { window.parent.postMessage(msg, '*'); } catch (e) {} }
+  function height() {
+    var h = Math.ceil(document.documentElement.getBoundingClientRect().height);
+    if (Math.abs(h - last) > 2) { last = h; post({ type: 'flightpath:height', height: h }); }
+  }
+  // Only a page that sizes the frame to fit says so; until then (e.g. a frame of
+  // fixed height) Flightpath keeps its own scroll bar.
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.type === 'flightpath:autosize') {
+      document.documentElement.classList.add('fp-in-frame'); last = 0; height();
+    }
+  });
+  document.addEventListener('DOMContentLoaded', function () {
+    height();
+    post({ type: 'flightpath:navigate' });
+    if (window.ResizeObserver) new ResizeObserver(height).observe(document.body);
+    window.addEventListener('load', height);
+    setInterval(height, 1000);
+    document.querySelectorAll('.fp-modal').forEach(function (m) {
+      new MutationObserver(function () {
+        if (m.hidden) return;
+        var sheet = m.querySelector('.fp-modal__sheet') || m;
+        setTimeout(function () { post({ type: 'flightpath:focus', top: Math.max(0, sheet.getBoundingClientRect().top + window.scrollY - 24) }); }, 30);
+      }).observe(m, { attributes: true, attributeFilter: ['hidden'] });
+    });
+  });
+})();
+</script>

@@ -373,3 +373,9 @@ progress.fp-progress:indeterminate::-moz-progress-bar { background: transparent;
 
 /* The Copy to hint sits under its input, inside the label. */
 .fp-field .fp-small { display: block; margin-top: 5px; font-weight: 400; }
+
+/* Inside a portal frame the frame grows to fit, so the page itself never needs
+   to scroll: no bottom padding stretching it, and the pop-up centres in the
+   part of the frame the client can see (the portal scrolls it into view). */
+.fp-in-frame body { overflow: hidden; }
+.fp-in-frame .fp-modal { align-items: flex-start; }
