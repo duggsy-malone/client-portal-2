@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+jobs/
+uploads/
+reports/
+.DS_Store
